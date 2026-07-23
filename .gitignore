@@ -1,0 +1,8 @@
+/target
+**/*.rs.bk
+community.db
+.env
+*.swp
+*.swo
+*~
+.DS_Store
