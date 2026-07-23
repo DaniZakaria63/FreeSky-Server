@@ -54,8 +54,8 @@ scp target/release/admin-tui <host>:/usr/local/bin/
 
 ### REST API (axum, port 3000)
 
-- `POST /register` — device registers X25519 pk_dev, receives name+color+encrypted group key (ECIES)
-- `POST /post` — receives MLS ciphertext + Ed25519 sig, verifies author, stores blob
+- `POST /register` — device registers secp256r1 pk_dev (65-byte SEC1), receives name+color+encrypted group key (ECIES)
+- `POST /post` — receives MLS ciphertext + ECDSA secp256r1 sig, verifies author, stores blob
 - `GET /feed` — paginated posts, ciphertext returned (client decrypts)
 - `POST /report` — report a post (reporter_pk + reason)
 
@@ -67,8 +67,8 @@ Schema in `docs/community-app-crypto-plan.md` §11: `devices`, `community`, `pos
 
 - Single community group (1 group per server instance)
 - First user: group created on register; subsequent users: get ECIES-encrypted group key
-- ECIES = X25519 + ChaCha20Poly1305 (`x25519-dalek` + `chacha20poly1305`)
-- Posts signed with Ed25519 (`ed25519-dalek`) — author_pk + author_sig on every post
+- ECIES = secp256r1 ECDH + AES-256-GCM (`p256` + `aes-gcm` crate) — 65-byte SEC1 epk + 12-byte nonce
+- Posts signed with ECDSA secp256r1 (`p256` ECDSA) — author_pk + author_sig on every post
 - MLS epoch tracked per post for forward secrecy verification
 
 ### Admin TUI (ratatui + rusqlite + reqwest)
@@ -84,11 +84,11 @@ Schema in `docs/community-app-crypto-plan.md` §11: `devices`, `community`, `pos
 - `snake_case` for Rust identifiers
 - Use `thiserror` for error types, `anyhow` for top-level error handling
 - SQL queries inline in Rust (no ORM)
-- Crypto operations use dalek crates (`x25519-dalek`, `ed25519-dalek`), not `ring`
+- Crypto operations use `p256` + `aes-gcm` crate (for secp256r1 compat with Android), not dalek crates
 - Buffer reuse pattern: allocate request/response buffers once, reuse across Noise transport loop
 - No `unsafe` without benchmark justification + safety comment
 - All public API inputs validated at boundary, then pass validated types internally
-- `pk_dev` = raw 32-byte X25519 public key bytes, no hex encoding in DB (BLOB)
+- `pk_dev` = raw 65-byte SEC1 uncompressed (0x04 || x || y), stored as BLOB in DB
 
 ## Test expectations
 
@@ -110,4 +110,13 @@ Single SQLite file (`community.db`) at server working directory.
 
 ## Source of truth
 
-Both plan docs in `docs/` define the spec. If ambiguity, prefer the Rust crate examples (openmls, snow) over prose. Talk to user before diverging from plan.
+**Canonical protocol sync** at `/home/dani/opt/docs/freesky/` — single source of truth for all Android↔Server wire formats, curve choices, API shapes. Read `PROTOCOL_SYNC.md` first. Overrides docs/ if conflict.
+
+Key points from sync doc:
+- **Android uses secp256r1** (NIST P-256), NOT X25519. AndroidKeyStore constraint.
+- **All ECIES must use** secp256r1 ECDH + AES-256-GCM + 65-byte SEC1 keys + 12-byte nonce.
+- **All signatures must use** ECDSA secp256r1 (SHA256withECDSA), NOT Ed25519.
+- `pk_dev` = 65-byte SEC1 uncompressed (0x04 || x || y), NOT 32-byte X25519.
+- Current code uses X25519 + ChaChaPoly + Ed25519 — **must be rewritten** to match Android.
+
+Both plan docs in `docs/` are stale. Fix them after verifying against PROTOCOL_SYNC.md.
