@@ -1,3 +1,4 @@
-fn main() {
-    println!("FreeSky admin TUI starting...");
+fn main() -> anyhow::Result<()> {
+    println!("FreeSky admin TUI — coming soon");
+    Ok(())
 }
