@@ -1,6 +1,7 @@
 mod admin;
 mod db;
 mod noise;
+mod queries;
 mod routes;
 
 use std::sync::Arc;
@@ -41,7 +42,7 @@ async fn main() -> anyhow::Result<()> {
 
     let admin_app = axum::Router::new()
         .route("/admin/health", axum::routing::get(admin::health))
-        .route("/admin/kick/:pk", axum::routing::post(admin::kick_member))
+        .route("/admin/kick/{pk}", axum::routing::post(admin::kick_member))
         .route("/admin/key-rotate", axum::routing::post(admin::key_rotate))
         .with_state(state.clone());
 
