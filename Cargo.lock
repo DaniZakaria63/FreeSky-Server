@@ -633,8 +633,10 @@ dependencies = [
 name = "freesky-shared"
 version = "0.1.0"
 dependencies = [
+ "chacha20poly1305",
  "ed25519-dalek",
  "hex",
+ "rand 0.8.7",
  "serde",
  "sha2",
  "thiserror",
