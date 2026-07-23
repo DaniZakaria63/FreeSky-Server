@@ -6,3 +6,5 @@ community.db
 *.swo
 *~
 .DS_Store
+.idea
+.poolside
