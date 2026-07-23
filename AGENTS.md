@@ -90,6 +90,17 @@ Schema in `docs/community-app-crypto-plan.md` §11: `devices`, `community`, `pos
 - All public API inputs validated at boundary, then pass validated types internally
 - `pk_dev` = raw 65-byte SEC1 uncompressed (0x04 || x || y), stored as BLOB in DB
 
+## Rust code style
+
+- **Error handling**: propagate with `?` at boundaries. Use `thiserror` for domain errors, `anyhow` for top-level. Avoid `.unwrap()` / `.expect()` in non-test code.
+- **Zero-cost abstractions**: prefer newtypes (`struct PkDev([u8; 65])`) over raw `Vec<u8>` for domain concepts. Use `Cow<'a, T>` when returning borrowed-or-owned.
+- **Borrow, don't clone**: functions take `&[u8]` not `Vec<u8>` unless they need ownership. Use `Arc<T>` for cross-thread shared state.
+- **Iterator chains**: prefer `.into_iter().filter().map().collect()` over manual loops with `Vec::push`.
+- **Memory efficiency**: use `Vec::with_capacity` when size is known. Reuse buffers in hot paths (Noise transport, feed pagination).
+- **Documentation**: `///` doc comments on all public items with `# Examples` and `# Errors` sections.
+- **Formatting**: `cargo fmt` must pass. `cargo clippy` must pass with zero warnings.
+- **Async**: use `async fn` for readability. Use `tokio::spawn_blocking` for CPU-bound work (crypto, DB). Never mix blocking and async code.
+
 ## Test expectations
 
 - SQLite in-memory (`:memory:`) for unit tests

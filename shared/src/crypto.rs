@@ -1,9 +1,9 @@
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use hkdf::Hkdf;
+use p256::PublicKey;
 use p256::ecdh::EphemeralSecret;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
-use p256::PublicKey;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
 
@@ -35,9 +35,26 @@ pub fn derive_color(pk_dev: &[u8]) -> u8 {
     hash[0] % 16
 }
 
-pub fn ecies_encrypt(recipient_pk: &[u8], plaintext: &[u8]) -> Vec<u8> {
+/// Validate that `pk_dev` is a valid secp256r1 SEC1 uncompressed public key.
+///
+/// Checks both the format (65 bytes, 0x04 prefix) and that the point
+/// lies on the NIST P-256 curve. Returns `true` if valid.
+pub fn validate_pk_dev(pk_dev: &[u8]) -> bool {
+    if pk_dev.len() != 65 || pk_dev[0] != 0x04 {
+        return false;
+    }
+    PublicKey::from_sec1_bytes(pk_dev).is_ok()
+}
+
+/// ECIES encrypt: encrypt `plaintext` to `recipient_pk` (65-byte SEC1 secp256r1).
+///
+/// Format: ephemeral_pk (65 bytes SEC1) || nonce (12 bytes) || ciphertext (plaintext_len + 16)
+///
+/// Returns an error if `recipient_pk` is not a valid secp256r1 SEC1 public key,
+/// rather than panicking. This prevents mutex poisoning in the DB layer.
+pub fn ecies_encrypt(recipient_pk: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, &'static str> {
     let recipient = PublicKey::from_sec1_bytes(recipient_pk)
-        .expect("invalid secp256r1 SEC1 public key");
+        .map_err(|_| "invalid secp256r1 SEC1 public key")?;
 
     let ephemeral = EphemeralSecret::random(&mut rand::rngs::OsRng);
     let ephemeral_pk = PublicKey::from(&ephemeral);
@@ -49,7 +66,7 @@ pub fn ecies_encrypt(recipient_pk: &[u8], plaintext: &[u8]) -> Vec<u8> {
     let hk = Hkdf::<Sha256>::new(Some(ECIES_HKDF_SALT), shared_bytes);
     let mut aes_key = [0u8; 32];
     hk.expand(ECIES_HKDF_INFO, &mut aes_key)
-        .expect("HKDF expand should succeed for 32 bytes");
+        .map_err(|_| "HKDF expand failed")?;
 
     let mut nonce_bytes = [0u8; 12];
     rand::rngs::OsRng.fill_bytes(&mut nonce_bytes);
@@ -58,11 +75,11 @@ pub fn ecies_encrypt(recipient_pk: &[u8], plaintext: &[u8]) -> Vec<u8> {
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&aes_key));
     let ciphertext = cipher
         .encrypt(nonce, plaintext)
-        .expect("AES-256-GCM encryption failed");
+        .map_err(|_| "AES-256-GCM encryption failed")?;
 
     let mut result = Vec::with_capacity(65 + 12 + ciphertext.len());
     result.extend_from_slice(&ephemeral_pk_bytes);
     result.extend_from_slice(&nonce_bytes);
     result.extend_from_slice(&ciphertext);
-    result
+    Ok(result)
 }

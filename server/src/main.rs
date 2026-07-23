@@ -1,11 +1,11 @@
 mod admin;
 mod db;
+mod logging;
 mod noise;
 mod queries;
 mod routes;
 
 use std::sync::Arc;
-use tracing_subscriber::EnvFilter;
 
 use crate::db::Database;
 
@@ -16,9 +16,7 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .init();
+    logging::init()?;
 
     let sk_server = x25519_dalek::StaticSecret::random_from_rng(rand::rngs::OsRng);
     let noise_handler = noise::NoiseHandler::new(sk_server);
