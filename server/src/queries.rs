@@ -1,8 +1,8 @@
 use anyhow::Result;
 use chrono::Utc;
-use rand::rngs::OsRng;
 use rand::RngCore;
-use rusqlite::{params, Connection};
+use rand::rngs::OsRng;
+use rusqlite::{Connection, params};
 
 use crate::db::Database;
 
@@ -126,7 +126,8 @@ impl Database {
         let group_key = get_or_create_group_key(&conn, now)?;
 
         // 4. ECIES-encrypt the group key to this device's public key
-        let encrypted_sk_comm = freesky_shared::crypto::ecies_encrypt(pk_dev, &group_key);
+        let encrypted_sk_comm = freesky_shared::crypto::ecies_encrypt(pk_dev, &group_key)
+            .map_err(|e| anyhow::anyhow!("ECIES encrypt failed: {e}"))?;
 
         // 5. Insert or update the device record
         let is_new = upsert_device(&conn, pk_dev, &name, color, &encrypted_sk_comm, now)?;
