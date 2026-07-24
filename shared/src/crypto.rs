@@ -2,6 +2,7 @@ use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use hkdf::Hkdf;
 use p256::PublicKey;
+use p256::SecretKey;
 use p256::ecdh::EphemeralSecret;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use rand::RngCore;
@@ -82,4 +83,40 @@ pub fn ecies_encrypt(recipient_pk: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, &
     result.extend_from_slice(&nonce_bytes);
     result.extend_from_slice(&ciphertext);
     Ok(result)
+}
+
+/// ECIES decrypt: decrypt data encrypted with [`ecies_encrypt`].
+///
+/// Wire format: ephemeral_pk (65 bytes SEC1) || nonce (12 bytes) || ciphertext
+///
+/// The `recipient_sk` is the recipient's secp256r1 private key. This is used
+/// by devices to decrypt the group key, and by the server for future admin ops.
+pub fn ecies_decrypt(recipient_sk: &SecretKey, encrypted: &[u8]) -> Result<Vec<u8>, &'static str> {
+    if encrypted.len() < 65 + 12 + 16 {
+        return Err("encrypted data too short");
+    }
+
+    let epk_bytes = &encrypted[..65];
+    let nonce_bytes = &encrypted[65..65 + 12];
+    let ciphertext = &encrypted[65 + 12..];
+
+    let ephemeral_pk =
+        PublicKey::from_sec1_bytes(epk_bytes).map_err(|_| "invalid ephemeral public key")?;
+
+    let shared_secret =
+        p256::ecdh::diffie_hellman(recipient_sk.to_nonzero_scalar(), ephemeral_pk.as_affine());
+    let shared_bytes = shared_secret.raw_secret_bytes();
+
+    let hk = Hkdf::<Sha256>::new(Some(ECIES_HKDF_SALT), shared_bytes);
+    let mut aes_key = [0u8; 32];
+    hk.expand(ECIES_HKDF_INFO, &mut aes_key)
+        .map_err(|_| "HKDF expand failed")?;
+
+    let nonce = Nonce::from_slice(nonce_bytes);
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&aes_key));
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|_| "AES-256-GCM decryption failed")?;
+
+    Ok(plaintext)
 }

@@ -12,7 +12,10 @@ pub struct NoiseHandler {
 impl NoiseHandler {
     pub fn new(sk_server: StaticSecret) -> Self {
         let pk_server = PublicKey::from(&sk_server);
-        Self { sk_server, pk_server }
+        Self {
+            sk_server,
+            pk_server,
+        }
     }
 
     pub fn pk_server_bytes(&self) -> [u8; 32] {

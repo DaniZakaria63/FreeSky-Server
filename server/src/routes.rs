@@ -19,8 +19,14 @@ pub async fn register(
 
     // Single atomic database operation (one lock, all steps together)
     let result = state.db.register_device(&req.pk_dev).map_err(|e| {
-        tracing::error!("register db error: {e}");
-        StatusCode::INTERNAL_SERVER_ERROR
+        let msg = e.to_string();
+        if msg.contains("no group key exists") {
+            tracing::warn!("register rejected: no group key (admin must run key-rotate first)");
+            StatusCode::SERVICE_UNAVAILABLE
+        } else {
+            tracing::error!("register db error: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
     })?;
 
     if result.is_banned {

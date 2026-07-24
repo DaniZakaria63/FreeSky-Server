@@ -66,7 +66,8 @@ Schema in `docs/community-app-crypto-plan.md` §11: `devices`, `community`, `pos
 ### MLS (openmls)
 
 - Single community group (1 group per server instance)
-- First user: group created on register; subsequent users: get ECIES-encrypted group key
+- **Admin creates group key** via `POST /admin/key-rotate` (not on first registration)
+- Users register → get ECIES-encrypted group key (must exist, else 503)
 - ECIES = secp256r1 ECDH + AES-256-GCM (`p256` + `aes-gcm` crate) — 65-byte SEC1 epk + 12-byte nonce
 - Posts signed with ECDSA secp256r1 (`p256` ECDSA) — author_pk + author_sig on every post
 - MLS epoch tracked per post for forward secrecy verification
