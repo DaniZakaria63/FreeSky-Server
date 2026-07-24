@@ -90,6 +90,7 @@ Schema in `docs/community-app-crypto-plan.md` §11: `devices`, `community`, `pos
 - No `unsafe` without benchmark justification + safety comment
 - All public API inputs validated at boundary, then pass validated types internally
 - `pk_dev` = raw 65-byte SEC1 uncompressed (0x04 || x || y), stored as BLOB in DB
+- **App authentication**: registration requires `apk_cert_sha1` matching `TRUSTED_APK_KEY` env var (single key per environment — dev uses debug key, prod uses release key)
 
 ## Rust code style
 

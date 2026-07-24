@@ -12,6 +12,7 @@ use crate::db::Database;
 pub struct AppState {
     pub db: Database,
     pub noise: noise::NoiseHandler,
+    pub trusted_app_key: String,
 }
 
 #[tokio::main]
@@ -23,9 +24,13 @@ async fn main() -> anyhow::Result<()> {
 
     let db = Database::open("community.db")?;
 
+    let trusted_app_key = load_trusted_app_key();
+    tracing::info!("trusted app key: {} bytes", trusted_app_key.len());
+
     let state = Arc::new(AppState {
         db,
         noise: noise_handler,
+        trusted_app_key,
     });
 
     let server_pk_hex = hex::encode(state.noise.pk_server_bytes());
@@ -56,4 +61,14 @@ async fn main() -> anyhow::Result<()> {
     )?;
 
     Ok(())
+}
+
+/// Load the trusted APK signing key SHA-1 from the `TRUSTED_APK_KEY` environment variable.
+/// Format: hex string with or without colons (e.g., `ABCDEF1234567890ABCDEF1234567890ABCDEF`).
+fn load_trusted_app_key() -> String {
+    std::env::var("TRUSTED_APK_KEY")
+        .unwrap_or_default()
+        .trim()
+        .to_uppercase()
+        .replace(':', "")
 }
