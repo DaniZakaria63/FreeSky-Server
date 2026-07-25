@@ -6,6 +6,22 @@ use rusqlite::{Connection, params};
 
 use crate::db::Database;
 
+/// Errors that can occur during post submission.
+#[derive(Debug, thiserror::Error)]
+pub enum PostError {
+    #[error("invalid ECDSA signature")]
+    InvalidSignature,
+    #[error("author is banned")]
+    AuthorBanned,
+    #[error("database error: {0}")]
+    Database(#[from] rusqlite::Error),
+}
+
+/// Result of a post submission.
+pub struct PostResult {
+    pub id: i64,
+}
+
 /// Result of a device registration attempt.
 pub struct RegisterResult {
     pub name: String,
@@ -31,28 +47,19 @@ fn check_banned(conn: &Connection, pk_dev: &[u8]) -> bool {
     banned_at.is_some()
 }
 
-/// Get the existing community group key, or create one if this is the first device.
-fn get_or_create_group_key(conn: &Connection, now: i64) -> Result<Vec<u8>> {
-    let existing: Option<Vec<u8>> = conn
+/// Get the existing community group key.
+///
+/// The key must already exist (created via `rotate_group_key`). If no key
+/// exists, returns an error — the admin must trigger key-rotate first.
+fn get_group_key(conn: &Connection) -> Result<Vec<u8>> {
+    let key: Vec<u8> = conn
         .query_row(
             "SELECT mls_group_state FROM community WHERE id = 1",
             [],
             |row| row.get::<_, Vec<u8>>(0),
         )
-        .ok();
-
-    if let Some(key) = existing {
-        return Ok(key);
-    }
-
-    // First device — generate a new group key using the OS CSPRNG
-    let mut key = [0u8; 32];
-    OsRng.fill_bytes(&mut key);
-    conn.execute(
-        "INSERT INTO community (id, mls_group_state, created_at, member_count) VALUES (1, ?, ?, 0)",
-        params![key.as_slice(), now],
-    )?;
-    Ok(key.to_vec())
+        .map_err(|e| anyhow::anyhow!("no group key exists: {e}"))?;
+    Ok(key)
 }
 
 /// Insert a new device or update an existing one's encrypted group key.
@@ -97,10 +104,106 @@ fn increment_member_count(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+/// Get all registered device public keys (excluding banned devices).
+fn get_all_device_keys(conn: &Connection) -> Result<Vec<Vec<u8>>> {
+    let mut stmt = conn.prepare("SELECT pk_dev FROM devices WHERE banned_at IS NULL")?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, Vec<u8>>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Create or rotate the community group key.
+///
+/// Generates a new 32-byte group key, re-ECIES-encrypts it for every
+/// non-banned device, and stores it in `community.mls_group_state`.
+///
+/// If no community row exists yet, inserts one. Otherwise updates the existing row.
+///
+/// Returns the number of devices that received the new key.
+fn rotate_group_key_inner(conn: &Connection, now: i64) -> Result<usize> {
+    // 1. Generate a new group key
+    let mut new_key = [0u8; 32];
+    OsRng.fill_bytes(&mut new_key);
+
+    // 2. Get all non-banned device keys
+    let device_keys = get_all_device_keys(conn)?;
+
+    // 3. Re-ECIES the new key for each device
+    for pk_dev in &device_keys {
+        let encrypted = freesky_shared::crypto::ecies_encrypt(pk_dev, &new_key)
+            .map_err(|e| anyhow::anyhow!("ECIES encrypt failed for device: {e}"))?;
+        conn.execute(
+            "UPDATE devices SET encrypted_sk_comm = ?, last_seen_at = ? WHERE pk_dev = ?",
+            params![encrypted, now, pk_dev],
+        )?;
+    }
+
+    // 4. Insert or update the community group state
+    let existing: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT mls_group_state FROM community WHERE id = 1",
+            [],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .ok();
+
+    if existing.is_some() {
+        conn.execute(
+            "UPDATE community SET mls_group_state = ? WHERE id = 1",
+            params![new_key.as_slice()],
+        )?;
+    } else {
+        conn.execute(
+            "INSERT INTO community (id, mls_group_state, created_at, member_count) VALUES (1, ?, ?, ?)",
+            params![new_key.as_slice(), now, device_keys.len() as i64],
+        )?;
+    }
+
+    Ok(device_keys.len())
+}
+
+/// Verify ECDSA signature and store a post.
+///
+/// 1. Verifies the ECDSA secp256r1 signature over SHA-256(ciphertext_comm)
+/// 2. Checks if the author is banned
+/// 3. Inserts the post into the `posts` table
+fn submit_post_inner(
+    conn: &Connection,
+    req: &freesky_shared::types::PostRequest,
+) -> Result<PostResult, PostError> {
+    // 1. Verify ECDSA signature (SHA256withECDSA over ciphertext_comm)
+    if !freesky_shared::crypto::ecdsa_verify(&req.author_pk, &req.ciphertext_comm, &req.author_sig)
+    {
+        return Err(PostError::InvalidSignature);
+    }
+
+    // 2. Check if author is banned
+    if check_banned(conn, &req.author_pk) {
+        return Err(PostError::AuthorBanned);
+    }
+
+    // 3. Insert the post
+    conn.execute(
+        "INSERT INTO posts (ciphertext_comm, author_pk, author_sig, timestamp, mls_epoch) VALUES (?, ?, ?, ?, ?)",
+        params![
+            req.ciphertext_comm,
+            req.author_pk,
+            req.author_sig,
+            req.timestamp,
+            req.mls_epoch,
+        ],
+    )?;
+
+    let id = conn.last_insert_rowid();
+
+    Ok(PostResult { id })
+}
+
 // ─── Public API ───
 
 impl Database {
-    /// Atomically register a device: check ban, get/create group key,
+    /// Atomically register a device: check ban, get group key,
     /// ECIES-encrypt it, upsert the device, and update member count.
     ///
     /// All operations happen under a single mutex lock (one transaction).
@@ -122,8 +225,8 @@ impl Database {
         let name = freesky_shared::crypto::derive_name(pk_dev);
         let color = freesky_shared::crypto::derive_color(pk_dev);
 
-        // 3. Get or create the community group key
-        let group_key = get_or_create_group_key(&conn, now)?;
+        // 3. Get the community group key (must exist — admin creates via key-rotate)
+        let group_key = get_group_key(&conn)?;
 
         // 4. ECIES-encrypt the group key to this device's public key
         let encrypted_sk_comm = freesky_shared::crypto::ecies_encrypt(pk_dev, &group_key)
@@ -143,5 +246,28 @@ impl Database {
             encrypted_sk_comm,
             is_banned: false,
         })
+    }
+
+    /// Rotate the community group key.
+    ///
+    /// Generates a new 32-byte group key, re-ECIES-encrypts it for every
+    /// non-banned device, and updates the `community.mls_group_state`.
+    ///
+    /// Returns the number of devices that received the new key.
+    pub fn rotate_group_key(&self) -> Result<usize> {
+        let conn = self.conn();
+        let now = Utc::now().timestamp();
+        rotate_group_key_inner(&conn, now)
+    }
+
+    /// Submit a post: verify ECDSA signature, check ban, store in DB.
+    ///
+    /// Returns the post ID on success, or a `PostError` on failure.
+    pub fn submit_post(
+        &self,
+        req: &freesky_shared::types::PostRequest,
+    ) -> Result<PostResult, PostError> {
+        let conn = self.conn();
+        submit_post_inner(&conn, req)
     }
 }

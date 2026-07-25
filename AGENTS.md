@@ -2,7 +2,7 @@
 
 ## Project
 
-Rust workspace: encrypted community app server. Server stores MLS-encrypted posts, cannot read content. Users authenticated via Noise IK handshake + X25519 device keys. Admin via ratatui TUI over SSH.
+Rust workspace: encrypted community app server. Server stores MLS-encrypted posts, cannot read content. Users authenticated via Noise IK handshake + secp256r1 device keys. Admin via ratatui TUI over SSH.
 
 ## Priorities
 
@@ -46,7 +46,7 @@ scp target/release/admin-tui <host>:/usr/local/bin/
 
 ### Transport (Noise IK, port 9443)
 
-- `snow` crate, pattern `Noise_IK_25519_ChaChaPoly_BLAKE2s`
+- `snow` crate, pattern `Noise_IK_P256_ChaChaPoly_BLAKE2s`
 - Prologue = SHA-256 of APK signing cert (app key)
 - Every connection: mutual auth, forward secrecy, session key derivation
 - After handshake, all API payloads encrypted with ChaChaPoly session keys
@@ -55,9 +55,14 @@ scp target/release/admin-tui <host>:/usr/local/bin/
 ### REST API (axum, port 3000)
 
 - `POST /register` — device registers secp256r1 pk_dev (65-byte SEC1), receives name+color+encrypted group key (ECIES)
-- `POST /post` — receives MLS ciphertext + ECDSA secp256r1 sig, verifies author, stores blob
-- `GET /feed` — paginated posts, ciphertext returned (client decrypts)
-- `POST /report` — report a post (reporter_pk + reason)
+- **Post, feed, report are NOT on HTTP** — they are only available over Noise (port 9443)
+
+### Noise Transport (port 9443)
+
+- `Noise_IK_P256_ChaChaPoly_BLAKE2s` pattern via `snow` crate
+- Prologue = SHA-256 of APK signing cert (app key)
+- All API operations (post, feed, report) go through encrypted Noise transport
+- Length-prefixed encrypted JSON messages after handshake
 
 ### Database (SQLite, rusqlite bundled)
 
@@ -66,7 +71,8 @@ Schema in `docs/community-app-crypto-plan.md` §11: `devices`, `community`, `pos
 ### MLS (openmls)
 
 - Single community group (1 group per server instance)
-- First user: group created on register; subsequent users: get ECIES-encrypted group key
+- **Admin creates group key** via `POST /admin/key-rotate` (not on first registration)
+- Users register → get ECIES-encrypted group key (must exist, else 503)
 - ECIES = secp256r1 ECDH + AES-256-GCM (`p256` + `aes-gcm` crate) — 65-byte SEC1 epk + 12-byte nonce
 - Posts signed with ECDSA secp256r1 (`p256` ECDSA) — author_pk + author_sig on every post
 - MLS epoch tracked per post for forward secrecy verification
@@ -89,6 +95,7 @@ Schema in `docs/community-app-crypto-plan.md` §11: `devices`, `community`, `pos
 - No `unsafe` without benchmark justification + safety comment
 - All public API inputs validated at boundary, then pass validated types internally
 - `pk_dev` = raw 65-byte SEC1 uncompressed (0x04 || x || y), stored as BLOB in DB
+- **App authentication**: registration requires `apk_cert_sha1` matching `TRUSTED_APK_KEY` env var (single key per environment — dev uses debug key, prod uses release key)
 
 ## Rust code style
 
