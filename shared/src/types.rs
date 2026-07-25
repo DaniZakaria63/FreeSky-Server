@@ -40,6 +40,7 @@ pub struct RegisterResponse {
     pub name: String,
     pub color: u8,
     pub encrypted_sk_comm: Vec<u8>,
+    pub server_noise_pk: Vec<u8>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

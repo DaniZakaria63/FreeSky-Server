@@ -2,7 +2,7 @@
 
 ## Project
 
-Rust workspace: encrypted community app server. Server stores MLS-encrypted posts, cannot read content. Users authenticated via Noise IK handshake + X25519 device keys. Admin via ratatui TUI over SSH.
+Rust workspace: encrypted community app server. Server stores MLS-encrypted posts, cannot read content. Users authenticated via Noise IK handshake + secp256r1 device keys. Admin via ratatui TUI over SSH.
 
 ## Priorities
 
@@ -46,7 +46,7 @@ scp target/release/admin-tui <host>:/usr/local/bin/
 
 ### Transport (Noise IK, port 9443)
 
-- `snow` crate, pattern `Noise_IK_25519_ChaChaPoly_BLAKE2s`
+- `snow` crate, pattern `Noise_IK_P256_ChaChaPoly_BLAKE2s`
 - Prologue = SHA-256 of APK signing cert (app key)
 - Every connection: mutual auth, forward secrecy, session key derivation
 - After handshake, all API payloads encrypted with ChaChaPoly session keys
@@ -55,9 +55,14 @@ scp target/release/admin-tui <host>:/usr/local/bin/
 ### REST API (axum, port 3000)
 
 - `POST /register` — device registers secp256r1 pk_dev (65-byte SEC1), receives name+color+encrypted group key (ECIES)
-- `POST /post` — receives MLS ciphertext + ECDSA secp256r1 sig, verifies author, stores blob ✅
-- `GET /feed` — paginated posts, ciphertext returned (client decrypts)
-- `POST /report` — report a post (reporter_pk + reason)
+- **Post, feed, report are NOT on HTTP** — they are only available over Noise (port 9443)
+
+### Noise Transport (port 9443)
+
+- `Noise_IK_P256_ChaChaPoly_BLAKE2s` pattern via `snow` crate
+- Prologue = SHA-256 of APK signing cert (app key)
+- All API operations (post, feed, report) go through encrypted Noise transport
+- Length-prefixed encrypted JSON messages after handshake
 
 ### Database (SQLite, rusqlite bundled)
 

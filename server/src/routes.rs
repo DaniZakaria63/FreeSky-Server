@@ -56,15 +56,19 @@ pub async fn register(
         result.color
     );
 
+    let server_noise_pk = state.noise.pk_server_bytes().to_vec();
+
     Json(freesky_shared::types::ApiResponse::success(
         freesky_shared::types::RegisterResponse {
             name: result.name,
             color: result.color,
             encrypted_sk_comm: result.encrypted_sk_comm,
+            server_noise_pk,
         },
     ))
 }
 
+#[allow(dead_code)]
 #[instrument(skip(state, req))]
 pub async fn submit_post(
     State(state): State<Arc<AppState>>,
@@ -105,6 +109,7 @@ pub async fn submit_post(
     }
 }
 
+#[allow(dead_code)]
 #[instrument(skip(_state))]
 pub async fn get_feed(
     State(_state): State<Arc<AppState>>,
@@ -118,6 +123,7 @@ pub async fn get_feed(
     ))
 }
 
+#[allow(dead_code)]
 #[instrument(skip(_state))]
 pub async fn report_post(
     State(_state): State<Arc<AppState>>,
