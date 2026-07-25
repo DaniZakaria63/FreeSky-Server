@@ -19,7 +19,7 @@ pub struct AppState {
 async fn main() -> anyhow::Result<()> {
     logging::init()?;
 
-    let sk_server = x25519_dalek::StaticSecret::random_from_rng(rand::rngs::OsRng);
+    let sk_server = p256::SecretKey::random(&mut rand::rngs::OsRng);
     let noise_handler = noise::NoiseHandler::new(sk_server);
 
     let db = Database::open("community.db")?;
@@ -30,7 +30,7 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(AppState {
         db,
         noise: noise_handler,
-        trusted_app_key,
+        trusted_app_key: trusted_app_key.clone(),
     });
 
     let server_pk_hex = hex::encode(state.noise.pk_server_bytes());
@@ -38,9 +38,6 @@ async fn main() -> anyhow::Result<()> {
 
     let http_app = axum::Router::new()
         .route("/register", axum::routing::post(routes::register))
-        .route("/post", axum::routing::post(routes::submit_post))
-        .route("/feed", axum::routing::get(routes::get_feed))
-        .route("/report", axum::routing::post(routes::report_post))
         .with_state(state.clone());
 
     let admin_app = axum::Router::new()
@@ -51,13 +48,38 @@ async fn main() -> anyhow::Result<()> {
 
     let http_listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     let admin_listener = tokio::net::TcpListener::bind("127.0.0.1:3001").await?;
+    let noise_listener = tokio::net::TcpListener::bind("0.0.0.0:9443").await?;
 
     tracing::info!("HTTP API listening on 0.0.0.0:3000");
     tracing::info!("Admin API listening on 127.0.0.1:3001");
+    tracing::info!("Noise API listening on 0.0.0.0:9443");
+
+    let noise_handler = state.noise.clone();
+    let noise_state = state.clone();
+    let noise_prologue = trusted_app_key.clone();
 
     tokio::try_join!(
         axum::serve(http_listener, http_app),
         axum::serve(admin_listener, admin_app),
+        async {
+            loop {
+                let (stream, addr) = noise_listener.accept().await?;
+                tracing::info!("noise connection from {addr}");
+                let handler = noise_handler.clone();
+                let state = noise_state.clone();
+                let prologue = noise_prologue.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = handler
+                        .handle_connection(stream, prologue.as_bytes(), state)
+                        .await
+                    {
+                        tracing::error!("noise connection error: {e}");
+                    }
+                });
+            }
+            #[allow(unreachable_code)]
+            Ok(())
+        },
     )?;
 
     Ok(())
