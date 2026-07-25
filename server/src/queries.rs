@@ -6,6 +6,22 @@ use rusqlite::{Connection, params};
 
 use crate::db::Database;
 
+/// Errors that can occur during post submission.
+#[derive(Debug, thiserror::Error)]
+pub enum PostError {
+    #[error("invalid ECDSA signature")]
+    InvalidSignature,
+    #[error("author is banned")]
+    AuthorBanned,
+    #[error("database error: {0}")]
+    Database(#[from] rusqlite::Error),
+}
+
+/// Result of a post submission.
+pub struct PostResult {
+    pub id: i64,
+}
+
 /// Result of a device registration attempt.
 pub struct RegisterResult {
     pub name: String,
@@ -147,6 +163,43 @@ fn rotate_group_key_inner(conn: &Connection, now: i64) -> Result<usize> {
     Ok(device_keys.len())
 }
 
+/// Verify ECDSA signature and store a post.
+///
+/// 1. Verifies the ECDSA secp256r1 signature over SHA-256(ciphertext_comm)
+/// 2. Checks if the author is banned
+/// 3. Inserts the post into the `posts` table
+fn submit_post_inner(
+    conn: &Connection,
+    req: &freesky_shared::types::PostRequest,
+) -> Result<PostResult, PostError> {
+    // 1. Verify ECDSA signature (SHA256withECDSA over ciphertext_comm)
+    if !freesky_shared::crypto::ecdsa_verify(&req.author_pk, &req.ciphertext_comm, &req.author_sig)
+    {
+        return Err(PostError::InvalidSignature);
+    }
+
+    // 2. Check if author is banned
+    if check_banned(conn, &req.author_pk) {
+        return Err(PostError::AuthorBanned);
+    }
+
+    // 3. Insert the post
+    conn.execute(
+        "INSERT INTO posts (ciphertext_comm, author_pk, author_sig, timestamp, mls_epoch) VALUES (?, ?, ?, ?, ?)",
+        params![
+            req.ciphertext_comm,
+            req.author_pk,
+            req.author_sig,
+            req.timestamp,
+            req.mls_epoch,
+        ],
+    )?;
+
+    let id = conn.last_insert_rowid();
+
+    Ok(PostResult { id })
+}
+
 // ─── Public API ───
 
 impl Database {
@@ -205,5 +258,16 @@ impl Database {
         let conn = self.conn();
         let now = Utc::now().timestamp();
         rotate_group_key_inner(&conn, now)
+    }
+
+    /// Submit a post: verify ECDSA signature, check ban, store in DB.
+    ///
+    /// Returns the post ID on success, or a `PostError` on failure.
+    pub fn submit_post(
+        &self,
+        req: &freesky_shared::types::PostRequest,
+    ) -> Result<PostResult, PostError> {
+        let conn = self.conn();
+        submit_post_inner(&conn, req)
     }
 }

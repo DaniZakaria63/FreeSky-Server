@@ -32,8 +32,6 @@ impl<T> ApiResponse<T> {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RegisterRequest {
     pub pk_dev: PkDev,
-    /// SHA-1 of the APK signing certificate (40-char hex string).
-    /// Used for app-level authentication — only trusted apps can register.
     pub apk_cert_sha1: String,
 }
 
@@ -49,6 +47,8 @@ pub struct PostRequest {
     pub ciphertext_comm: Vec<u8>,
     pub author_pk: PkDev,
     pub author_sig: Signature,
+    pub timestamp: i64,
+    pub mls_epoch: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

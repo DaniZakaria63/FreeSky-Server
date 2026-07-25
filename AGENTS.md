@@ -55,7 +55,7 @@ scp target/release/admin-tui <host>:/usr/local/bin/
 ### REST API (axum, port 3000)
 
 - `POST /register` — device registers secp256r1 pk_dev (65-byte SEC1), receives name+color+encrypted group key (ECIES)
-- `POST /post` — receives MLS ciphertext + ECDSA secp256r1 sig, verifies author, stores blob
+- `POST /post` — receives MLS ciphertext + ECDSA secp256r1 sig, verifies author, stores blob ✅
 - `GET /feed` — paginated posts, ciphertext returned (client decrypts)
 - `POST /report` — report a post (reporter_pk + reason)
 

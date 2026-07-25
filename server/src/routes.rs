@@ -65,13 +65,44 @@ pub async fn register(
     ))
 }
 
-#[instrument(skip(_state))]
+#[instrument(skip(state, req))]
 pub async fn submit_post(
-    State(_state): State<Arc<AppState>>,
-    Json(_req): Json<freesky_shared::types::PostRequest>,
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<freesky_shared::types::PostRequest>,
 ) -> Json<freesky_shared::types::ApiResponse<()>> {
     tracing::debug!("submit_post request received");
-    Json(freesky_shared::types::ApiResponse::error("not implemented"))
+
+    // Validate: author_pk must be a valid secp256r1 SEC1 public key
+    if !freesky_shared::crypto::validate_pk_dev(&req.author_pk) {
+        tracing::warn!("submit_post rejected: invalid author_pk");
+        return Json(freesky_shared::types::ApiResponse::error(
+            "invalid author key",
+        ));
+    }
+
+    // Store the post (DB layer verifies ECDSA signature + checks ban)
+    match state.db.submit_post(&req) {
+        Ok(result) => {
+            tracing::info!("post stored: id={}", result.id);
+            Json(freesky_shared::types::ApiResponse::success(()))
+        }
+        Err(crate::queries::PostError::InvalidSignature) => {
+            tracing::warn!("submit_post rejected: invalid ECDSA signature");
+            Json(freesky_shared::types::ApiResponse::error(
+                "invalid signature",
+            ))
+        }
+        Err(crate::queries::PostError::AuthorBanned) => {
+            tracing::warn!("submit_post rejected: author is banned");
+            Json(freesky_shared::types::ApiResponse::error(
+                "author is banned",
+            ))
+        }
+        Err(e) => {
+            tracing::error!("submit_post db error: {e}");
+            Json(freesky_shared::types::ApiResponse::error("internal error"))
+        }
+    }
 }
 
 #[instrument(skip(_state))]

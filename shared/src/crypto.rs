@@ -4,6 +4,8 @@ use hkdf::Hkdf;
 use p256::PublicKey;
 use p256::SecretKey;
 use p256::ecdh::EphemeralSecret;
+use p256::ecdsa::signature::Verifier;
+use p256::ecdsa::{Signature, VerifyingKey};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
@@ -119,4 +121,24 @@ pub fn ecies_decrypt(recipient_sk: &SecretKey, encrypted: &[u8]) -> Result<Vec<u
         .map_err(|_| "AES-256-GCM decryption failed")?;
 
     Ok(plaintext)
+}
+
+/// Verify an ECDSA secp256r1 signature over SHA-256(message).
+///
+/// `author_pk` must be a 65-byte SEC1 uncompressed public key.
+/// `author_sig` must be a DER-encoded ECDSA signature (SHA256withECDSA).
+/// Returns `true` if the signature is valid.
+///
+/// This matches the Android `Signature.sign("SHA256withECDSA", message)` flow:
+/// both sides compute SHA-256(message) and verify the ECDSA signature.
+pub fn ecdsa_verify(author_pk: &[u8], message: &[u8], author_sig: &[u8]) -> bool {
+    let verifying_key = match VerifyingKey::from_sec1_bytes(author_pk) {
+        Ok(k) => k,
+        Err(_) => return false,
+    };
+    let sig = match Signature::from_der(author_sig) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    verifying_key.verify(message, &sig).is_ok()
 }
