@@ -8,3 +8,5 @@ community.db
 .DS_Store
 .idea
 .poolside
+.commandcode
+*.log
