@@ -18,6 +18,7 @@ pub enum PostError {
 }
 
 /// Result of a post submission.
+#[derive(Debug)]
 pub struct PostResult {
     pub id: i64,
 }
@@ -30,9 +31,21 @@ pub struct RegisterResult {
     pub is_banned: bool,
 }
 
+/// Result of a feed fetch.
+pub struct FeedResult {
+    pub posts: Vec<freesky_shared::types::PostEntry>,
+    pub next_cursor: Option<i64>,
+}
+
 // ─── Private helper functions ───
 // Each takes &Connection — no locking, just SQL operations.
 // The caller (register_device) holds the lock for the entire transaction.
+
+/// Maximum number of posts returned per feed fetch (matches Android's OKHTTP page size).
+pub const MAX_FEED_LIMIT: u32 = 100;
+
+/// Default page size when the client doesn't specify one.
+pub const DEFAULT_FEED_LIMIT: u32 = 50;
 
 /// Check if a device is banned.
 fn check_banned(conn: &Connection, pk_dev: &[u8]) -> bool {
@@ -200,6 +213,67 @@ fn submit_post_inner(
     Ok(PostResult { id })
 }
 
+/// Fetch a page of community posts, newest-first.
+///
+/// Pagination is cursor-based on `timestamp`. The cursor is the timestamp of
+/// the oldest post in the previous batch; the next batch returns posts strictly
+/// older than the cursor. `cursor=None` starts from the newest post.
+///
+/// `limit` is clamped to [1, MAX_FEED_LIMIT]; None → DEFAULT_FEED_LIMIT.
+///
+/// `next_cursor` is the timestamp of the last returned post, or None if the
+/// batch was empty (no more posts to paginate).
+fn fetch_feed_inner(
+    conn: &Connection,
+    cursor: Option<i64>,
+    limit: Option<u32>,
+) -> Result<FeedResult> {
+    let clamped = limit.unwrap_or(DEFAULT_FEED_LIMIT).clamp(1, MAX_FEED_LIMIT);
+
+    // Build "WHERE timestamp < ?" only when a cursor is present.
+    let sql = if cursor.is_some() {
+        "SELECT id, ciphertext_comm, author_pk, author_sig, timestamp, mls_epoch
+         FROM posts WHERE timestamp < ? ORDER BY timestamp DESC, id DESC LIMIT ?"
+    } else {
+        "SELECT id, ciphertext_comm, author_pk, author_sig, timestamp, mls_epoch
+         FROM posts ORDER BY timestamp DESC, id DESC LIMIT ?"
+    };
+
+    let mut stmt = conn.prepare(sql)?;
+    let mapped = if let Some(c) = cursor {
+        stmt.query_map(params![c, clamped as i64], map_post_entry)?
+    } else {
+        stmt.query_map(params![clamped as i64], map_post_entry)?
+    };
+
+    let mut posts: Vec<freesky_shared::types::PostEntry> = Vec::with_capacity(clamped as usize);
+    let mut last_ts: Option<i64> = None;
+    for entry in mapped {
+        let entry = entry?;
+        last_ts = Some(entry.timestamp);
+        posts.push(entry);
+    }
+
+    // Only expose a next cursor if we returned a full batch (likely more rows).
+    let next_cursor = last_ts.filter(|_| posts.len() as u32 >= clamped);
+
+    Ok(FeedResult { posts, next_cursor })
+}
+
+/// Row mapper: builds a `PostEntry` from a SELECT in column order
+/// `id, ciphertext_comm, author_pk, author_sig, timestamp, mls_epoch`.
+fn map_post_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<freesky_shared::types::PostEntry> {
+    let mls_epoch_i: i64 = row.get(5)?;
+    Ok(freesky_shared::types::PostEntry {
+        id: row.get(0)?,
+        ciphertext_comm: row.get(1)?,
+        author_pk: row.get(2)?,
+        author_sig: row.get(3)?,
+        timestamp: row.get(4)?,
+        mls_epoch: mls_epoch_i as u64,
+    })
+}
+
 // ─── Public API ───
 
 impl Database {
@@ -270,4 +344,18 @@ impl Database {
         let conn = self.conn();
         submit_post_inner(&conn, req)
     }
+
+    /// Fetch a page of community posts, newest-first, cursor-paginated.
+    ///
+    /// `cursor` = timestamp of the oldest post in the previous batch (None → newest).
+    /// `limit` is clamped to [1, MAX_FEED_LIMIT]; None → DEFAULT_FEED_LIMIT.
+    /// Returns posts and a `next_cursor` for the next fetch (None when exhausted).
+    pub fn fetch_feed(&self, cursor: Option<i64>, limit: Option<u32>) -> Result<FeedResult> {
+        let conn = self.conn();
+        fetch_feed_inner(&conn, cursor, limit)
+    }
 }
+
+#[cfg(test)]
+#[path = "queries_test.rs"]
+mod tests;

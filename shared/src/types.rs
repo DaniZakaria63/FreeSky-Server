@@ -53,6 +53,14 @@ pub struct PostRequest {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct FeedRequest {
+    /// Cursor = timestamp of oldest post in previous batch. None = start from newest.
+    pub cursor: Option<i64>,
+    /// Max posts to return. Server clamps to [1, MAX_FEED_LIMIT]. None = default.
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct FeedResponse {
     pub posts: Vec<PostEntry>,
     pub next_cursor: Option<i64>,

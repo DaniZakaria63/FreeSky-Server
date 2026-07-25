@@ -184,7 +184,7 @@ impl NoiseHandler {
 enum NoiseApiRequest {
     Register(freesky_shared::types::RegisterRequest),
     Post(freesky_shared::types::PostRequest),
-    Feed,
+    Feed(freesky_shared::types::FeedRequest),
     Report(freesky_shared::types::ReportRequest),
 }
 
@@ -273,15 +273,32 @@ fn route_noise_request(
                 }
             }
         }
-        NoiseApiRequest::Feed => {
-            tracing::debug!("noise feed request");
-            serde_json::json!({
-                "message": "success",
-                "data": {
-                    "posts": [],
-                    "next_cursor": null
+        NoiseApiRequest::Feed(req) => {
+            tracing::debug!(
+                cursor = ?req.cursor,
+                limit = ?req.limit,
+                "noise feed request"
+            );
+            match state.db.fetch_feed(req.cursor, req.limit) {
+                Ok(result) => {
+                    tracing::info!(
+                        "noise feed served: {} posts, next_cursor={:?}",
+                        result.posts.len(),
+                        result.next_cursor
+                    );
+                    serde_json::json!({
+                        "message": "success",
+                        "data": {
+                            "posts": result.posts,
+                            "next_cursor": result.next_cursor
+                        }
+                    })
                 }
-            })
+                Err(e) => {
+                    tracing::error!("noise feed db error: {e}");
+                    serde_json::json!({ "message": "internal error", "data": null })
+                }
+            }
         }
         NoiseApiRequest::Report(_req) => {
             tracing::debug!("noise report request");
