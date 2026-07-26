@@ -57,7 +57,31 @@ impl Database {
 
             CREATE INDEX IF NOT EXISTS idx_posts_timestamp ON posts(timestamp DESC);
             CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_pk);
+
+            CREATE TABLE IF NOT EXISTS server_config (
+                key   TEXT PRIMARY KEY,
+                value BLOB NOT NULL
+            );
             ",
+        )?;
+        Ok(())
+    }
+
+    pub fn load_noise_key(&self) -> Option<Vec<u8>> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT value FROM server_config WHERE key = 'noise_sk'",
+            [],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .ok()
+    }
+
+    pub fn store_noise_key(&self, sk_bytes: &[u8]) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO server_config (key, value) VALUES ('noise_sk', ?1)",
+            [sk_bytes],
         )?;
         Ok(())
     }

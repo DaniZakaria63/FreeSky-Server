@@ -58,9 +58,9 @@ The server verifies the signature before storing the post. That means:
 - **No tampering.** If anyone flips a byte in the ciphertext, the signature stops matching and the server rejects it.
 - **Provenance stays honest.** Every post is cryptographically tied to a device, and the server can't forge one even if it wanted to.
 
-### 4. The transport layer is also encrypted (Noise IK)
+### 4. The transport layer is also encrypted (Noise NK)
 
-Everything above is about *what* gets stored. But the connection between your phone and the server is itself wrapped in a separate encryption layer, using the **Noise Protocol Framework** — specifically the `Noise_IK_P256_ChaChaPoly_BLAKE2s` pattern.
+Everything above is about *what* gets stored. But the connection between your phone and the server is itself wrapped in a separate encryption layer, using the **Noise Protocol Framework** — specifically the `Noise_NK_P256_ChaChaPoly_BLAKE2s` pattern.
 
 Noise is the same framework WhatsApp Signal uses for their transport. The `IK` variant means:
 
@@ -110,10 +110,10 @@ freesky-server/
 
 ### The server (`server/`)
 
-Built on **axum** (async HTTP framework) + **tokio** (the async runtime) + **rusqlite** (SQLite, bundled) + **snow** (Noise IK) + **p256** / **aes-gcm** / **hkdf** (the crypto primitives). It listens on three ports:
+Built on **axum** (async HTTP framework) + **tokio** (the async runtime) + **rusqlite** (SQLite, bundled) + **snow** (Noise NK) + **p256** / **aes-gcm** / **hkdf** (the crypto primitives). It listens on three ports:
 
 - **3000** — public HTTP, only for `/register` (registration must be reachable before Noise keys are exchanged).
-- **9443** — raw TCP, Noise IK handshake then length-prefixed encrypted JSON. This is where `post`, `feed`, and `report` live. Nothing readable hits this port in plaintext.
+- **9443** — raw TCP, Noise NK handshake then length-prefixed encrypted JSON. This is where `post`, `feed`, and `report` live. Nothing readable hits this port in plaintext.
 - **3001** — admin API, localhost only. Key rotation, member kicks.
 
 ### The admin TUI (`admin-tui/`)
@@ -163,7 +163,7 @@ Real, not aspirational. As of the last sync with the Android client:
 | secp256r1 device identity | Done |
 | ECIES group key delivery | Done |
 | ECDSA post signature verification | Done |
-| Noise IK transport (secp256r1) | Done |
+| Noise NK transport (secp256r1) | Done |
 | Post submission over Noise | Done |
 | Feed retrieval with cursor pagination | Done |
 | Admin key rotation (re-ECIES to all devices) | Done |
