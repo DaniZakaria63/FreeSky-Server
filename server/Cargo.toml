@@ -18,7 +18,7 @@ serde_json = "1"
 # MLS group encryption
 openmls = "0.7"
 
-# Transport security (Noise IK)
+# Transport security (Noise NK)
 snow = { version = "0.10", features = ["p256"] }
 blake2 = "0.10"
 

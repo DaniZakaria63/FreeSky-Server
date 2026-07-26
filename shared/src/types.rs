@@ -83,6 +83,17 @@ pub struct ReportRequest {
     pub reason: Option<String>,
 }
 
+/// Unsolicited notification pushed from server to connected clients over Noise.
+///
+/// The client distinguishes notifications from request responses by the
+/// `type` field — responses use `message`/`data`, notifications use `type`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Notification {
+    #[serde(rename = "type")]
+    pub notification_type: String,
+    pub timestamp: i64,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("device not found or banned")]
