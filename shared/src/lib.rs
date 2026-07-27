@@ -1,3 +1,2 @@
-pub fn version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
-}
+pub mod crypto;
+pub mod types;
