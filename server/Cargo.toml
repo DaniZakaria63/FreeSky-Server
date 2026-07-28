@@ -8,8 +8,8 @@ edition = "2024"
 axum = "0.8"
 tokio = { version = "1", features = ["full", "net"] }
 
-# Database
-rusqlite = { version = "0.32", features = ["bundled"] }
+# Database (Turso remote / SQLite local)
+libsql = { version = "0.10.0-pre.4", features = ["remote"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

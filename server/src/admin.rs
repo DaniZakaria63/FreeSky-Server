@@ -38,7 +38,7 @@ pub async fn key_rotate(
 ) -> Json<freesky_shared::types::ApiResponse<KeyRotateResponse>> {
     tracing::debug!("key_rotate request received");
 
-    let devices_updated = match state.db.rotate_group_key() {
+    let devices_updated = match state.db.rotate_group_key().await {
         Ok(n) => n,
         Err(e) => {
             tracing::error!("key rotation failed: {e}");
