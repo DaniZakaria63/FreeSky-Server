@@ -3,9 +3,10 @@ set -euo pipefail
 
 VPS_HOST="${1:-}"
 VPS_USER="${2:-root}"
+SSH_PORT="${3:-15220}"
 
 if [ -z "$VPS_HOST" ]; then
-  echo "Usage: $0 <vps-host> [user]" 2>&1
+  echo "Usage: $0 <vps-host> [user] [port]" 2>&1
   exit 1
 fi
 
@@ -15,9 +16,9 @@ echo "==> Building release binary..."
 cargo build --release -p freesky-server
 
 echo "==> Copying binary to $VPS_HOST..."
-rsync -avz --delete "$BIN" "$VPS_USER@$VPS_HOST:/usr/local/bin/freesky-server"
+rsync -avz --delete -e "ssh -p $SSH_PORT" "$BIN" "$VPS_USER@$VPS_HOST:/usr/local/bin/freesky-server"
 
 echo "==> Restarting service..."
-ssh "$VPS_USER@$VPS_HOST" systemctl restart freesky-server
+ssh -p $SSH_PORT "$VPS_USER@$VPS_HOST" systemctl restart freesky-server
 
 echo "==> Done."
