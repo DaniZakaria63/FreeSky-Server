@@ -121,7 +121,7 @@ fn debug_noise_state(msg1: &[u8], sk_server: &SecretKey, prologue: &[u8]) {
         tracing::error!("DEBUG_NOISE: tag (from msg1) = {}", hex::encode(tag));
 
         let result = chacha20poly1305::ChaCha20Poly1305::new(
-            &GenericArray::from_slice(&hkdf_out[1]),
+            GenericArray::from_slice(&hkdf_out[1]),
         )
         .decrypt_in_place_detached(
             &[0u8; 12].into(),
@@ -319,7 +319,7 @@ impl NoiseHandler {
                                 };
 
                                 // Route to handler.
-                                let response = route_noise_request(&state, request);
+                                let response = route_noise_request(&state, request).await;
 
                                 // Encrypt and send response.
                                 let response_json = serde_json::to_vec(&response)
@@ -373,13 +373,14 @@ enum NoiseApiRequest {
     Post(freesky_shared::types::PostRequest),
     Feed(freesky_shared::types::FeedRequest),
     Report(freesky_shared::types::ReportRequest),
+    Thread(freesky_shared::types::ThreadRequest),
 }
 
 /// Route a Noise API request to the appropriate handler.
 ///
 /// Returns a `serde_json::Value` with `{ message, data }` structure,
 /// matching the HTTP API's `ApiResponse` format.
-fn route_noise_request(
+async fn route_noise_request(
     state: &std::sync::Arc<AppState>,
     request: NoiseApiRequest,
 ) -> serde_json::Value {
@@ -399,7 +400,7 @@ fn route_noise_request(
             }
 
             // Register device
-            match state.db.register_device(&req.pk_dev) {
+            match state.db.register_device(&req.pk_dev).await {
                 Ok(result) if !result.is_banned => {
                     tracing::info!(
                         "noise register success: name={} color={}",
@@ -441,7 +442,7 @@ fn route_noise_request(
             }
 
             // Submit post
-            match state.db.submit_post(&req) {
+            match state.db.submit_post(&req).await {
                 Ok(result) => {
                     tracing::info!("noise post stored: id={}", result.id);
 
@@ -475,7 +476,7 @@ fn route_noise_request(
                 limit = ?req.limit,
                 "noise feed request"
             );
-            match state.db.fetch_feed(req.cursor, req.limit) {
+            match state.db.fetch_feed(req.cursor, req.limit).await {
                 Ok(result) => {
                     tracing::info!(
                         "noise feed served: {} posts, next_cursor={:?}",
@@ -492,6 +493,27 @@ fn route_noise_request(
                 }
                 Err(e) => {
                     tracing::error!("noise feed db error: {e}");
+                    serde_json::json!({ "message": "internal error", "data": null })
+                }
+            }
+        }
+        NoiseApiRequest::Thread(req) => {
+            tracing::debug!(post_id = req.post_id, "noise thread request");
+            match state.db.fetch_thread(req.post_id).await {
+                Ok(result) => {
+                    serde_json::json!({
+                        "message": "success",
+                        "data": {
+                            "post": result.post,
+                            "replies": result.replies
+                        }
+                    })
+                }
+                Err(crate::queries::PostError::NotFound) => {
+                    serde_json::json!({ "message": "post not found", "data": null })
+                }
+                Err(e) => {
+                    tracing::error!("noise thread db error: {e}");
                     serde_json::json!({ "message": "internal error", "data": null })
                 }
             }
