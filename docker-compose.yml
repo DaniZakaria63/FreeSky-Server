@@ -1,0 +1,15 @@
+version: "3.9"
+services:
+  freesky-server:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+      - "9443:9443"
+    volumes:
+      - freesky-data:/data
+    environment:
+      - TURSO_URL=file:///data/community.db
+      - TRUSTED_APK_KEY=${TRUSTED_APK_KEY}
+volumes:
+  freesky-data:

@@ -1,0 +1,17 @@
+[Unit]
+Description=Freesky encrypted community server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=freesky
+Group=freesky
+WorkingDirectory=/var/lib/freesky
+EnvironmentFile=-/etc/freesky.env
+ExecStart=/usr/local/bin/freesky-server
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
