@@ -20,5 +20,5 @@ jobs:
           ssh-keyscan -H -p 15220 ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
       - name: Deploy binary
         run: |
-          rsync -avz --delete -e "ssh -p 15220" target/release/freesky-server ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/usr/local/bin/freesky-server
-          ssh -p 15220 ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} systemctl restart freesky-server
+          rsync -avz --delete -e "ssh -p 15220" target/release/freesky-server ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/tmp/freesky-server
+          ssh -p 15220 ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} "sudo mv /tmp/freesky-server /usr/local/bin/freesky-server && sudo systemctl restart freesky-server"
