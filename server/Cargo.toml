@@ -8,8 +8,8 @@ edition = "2024"
 axum = "0.8"
 tokio = { version = "1", features = ["full", "net"] }
 
-# Database
-rusqlite = { version = "0.32", features = ["bundled"] }
+# Database (Turso remote / SQLite local)
+libsql = { version = "0.10.0-pre.4", features = ["remote"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -18,7 +18,7 @@ serde_json = "1"
 # MLS group encryption
 openmls = "0.7"
 
-# Transport security (Noise IK)
+# Transport security (Noise NK)
 snow = { version = "0.10", features = ["p256"] }
 blake2 = "0.10"
 

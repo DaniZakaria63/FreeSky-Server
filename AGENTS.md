@@ -2,7 +2,7 @@
 
 ## Project
 
-Rust workspace: encrypted community app server. Server stores MLS-encrypted posts, cannot read content. Users authenticated via Noise IK handshake + secp256r1 device keys. Admin via ratatui TUI over SSH.
+Rust workspace: encrypted community app server. Server stores MLS-encrypted posts, cannot read content. Users authenticated via Noise NK handshake + secp256r1 device keys. Admin via ratatui TUI over SSH.
 
 ## Priorities
 
@@ -18,7 +18,7 @@ freesky-server/
 │   ├── Cargo.toml
 │   └── src/
 │       ├── main.rs         # tokio main, dual listener (3000 HTTP, 9443 Noise)
-│       ├── noise.rs        # Noise IK handshake (snow crate)
+│       ├── noise.rs        # Noise NK handshake (snow crate)
 │       ├── routes.rs       # register, post, feed
 │       ├── admin.rs        # localhost admin API
 │       └── db.rs           # SQLite queries + schema
@@ -44,9 +44,9 @@ scp target/release/admin-tui <host>:/usr/local/bin/
 
 ## Architecture
 
-### Transport (Noise IK, port 9443)
+### Transport (Noise NK, port 9443)
 
-- `snow` crate, pattern `Noise_IK_P256_ChaChaPoly_BLAKE2s`
+- `snow` crate, pattern `Noise_NK_P256_ChaChaPoly_BLAKE2s`
 - Prologue = SHA-256 of APK signing cert (app key)
 - Every connection: mutual auth, forward secrecy, session key derivation
 - After handshake, all API payloads encrypted with ChaChaPoly session keys
@@ -59,7 +59,7 @@ scp target/release/admin-tui <host>:/usr/local/bin/
 
 ### Noise Transport (port 9443)
 
-- `Noise_IK_P256_ChaChaPoly_BLAKE2s` pattern via `snow` crate
+- `Noise_NK_P256_ChaChaPoly_BLAKE2s` pattern via `snow` crate
 - Prologue = SHA-256 of APK signing cert (app key)
 - All API operations (post, feed, report) go through encrypted Noise transport
 - Length-prefixed encrypted JSON messages after handshake

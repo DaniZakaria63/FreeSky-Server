@@ -50,6 +50,16 @@ pub struct PostRequest {
     pub author_sig: Signature,
     pub timestamp: i64,
     pub mls_epoch: u64,
+    #[serde(default)]
+    pub parent_id: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FeedRequest {
+    /// Cursor = timestamp of oldest post in previous batch. None = start from newest.
+    pub cursor: Option<i64>,
+    /// Max posts to return. Server clamps to [1, MAX_FEED_LIMIT]. None = default.
+    pub limit: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -66,6 +76,7 @@ pub struct PostEntry {
     pub author_sig: Signature,
     pub timestamp: i64,
     pub mls_epoch: u64,
+    pub parent_id: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -73,6 +84,28 @@ pub struct ReportRequest {
     pub post_id: i64,
     pub reporter_pk: PkDev,
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ThreadRequest {
+    pub post_id: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ThreadResponse {
+    pub post: PostEntry,
+    pub replies: Vec<PostEntry>,
+}
+
+/// Unsolicited notification pushed from server to connected clients over Noise.
+///
+/// The client distinguishes notifications from request responses by the
+/// `type` field — responses use `message`/`data`, notifications use `type`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Notification {
+    #[serde(rename = "type")]
+    pub notification_type: String,
+    pub timestamp: i64,
 }
 
 #[derive(Debug, thiserror::Error)]

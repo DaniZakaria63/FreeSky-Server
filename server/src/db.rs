@@ -1,68 +1,58 @@
-use rusqlite::Connection;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static DB_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn next_db_id() -> String {
+    let n = DB_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("freesky-{n:x}")
+}
 
 pub struct Database {
-    conn: Mutex<Connection>,
+    pub(crate) db: libsql::Database,
 }
 
 impl Database {
-    pub fn open(path: &str) -> anyhow::Result<Self> {
-        let conn = Connection::open(path)?;
-        let db = Self {
-            conn: Mutex::new(conn),
+    pub async fn connect(url: &str, token: &str) -> anyhow::Result<Self> {
+        let db = if url.starts_with("file://") || url.starts_with("file:") || !url.contains("://") {
+            let path = url
+                .strip_prefix("file://")
+                .or_else(|| url.strip_prefix("file:"))
+                .unwrap_or(url);
+            libsql::Builder::new_local(path).build().await?
+        } else {
+            libsql::Builder::new_remote(url.to_string(), token.to_string())
+                .build()
+                .await?
         };
-        db.run_migrations()?;
-        Ok(db)
+        Ok(Self { db })
     }
 
-    fn run_migrations(&self) -> anyhow::Result<()> {
-        let conn = self.conn.lock().unwrap();
-        conn.execute_batch(
-            "
-            CREATE TABLE IF NOT EXISTS devices (
-                pk_dev          BLOB PRIMARY KEY,
-                user_name       TEXT NOT NULL,
-                user_color      INTEGER NOT NULL,
-                encrypted_sk_comm BLOB,
-                registered_at   INTEGER NOT NULL,
-                banned_at       INTEGER,
-                last_seen_at    INTEGER
-            );
+    pub async fn in_memory() -> anyhow::Result<Self> {
+        let path = std::env::temp_dir().join(next_db_id());
+        let _ = std::fs::remove_file(&path);
+        let db = libsql::Builder::new_local(&path).build().await?;
+        Ok(Self { db })
+    }
 
-            CREATE TABLE IF NOT EXISTS community (
-                id              INTEGER PRIMARY KEY DEFAULT 1,
-                mls_group_state BLOB,
-                created_at      INTEGER NOT NULL,
-                member_count    INTEGER DEFAULT 1
-            );
+    pub async fn load_noise_key(&self) -> Option<Vec<u8>> {
+        let conn = self.db.connect().ok()?;
+        let mut rows = conn
+            .query("SELECT value FROM server_config WHERE key = 'noise_sk'", ())
+            .await
+            .ok()?;
+        match rows.next().await.ok()? {
+            Some(row) => row.get::<Vec<u8>>(0).ok(),
+            None => None,
+        }
+    }
 
-            CREATE TABLE IF NOT EXISTS posts (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                ciphertext_comm BLOB NOT NULL,
-                author_pk       BLOB NOT NULL REFERENCES devices(pk_dev),
-                author_sig      BLOB NOT NULL,
-                timestamp       INTEGER NOT NULL,
-                mls_epoch       INTEGER NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS reports (
-                id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                post_id         INTEGER NOT NULL REFERENCES posts(id),
-                reporter_pk     BLOB NOT NULL REFERENCES devices(pk_dev),
-                reason          TEXT,
-                reported_at     INTEGER NOT NULL,
-                resolved_at     INTEGER,
-                resolution      TEXT
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_posts_timestamp ON posts(timestamp DESC);
-            CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_pk);
-            ",
-        )?;
+    pub async fn store_noise_key(&self, sk_bytes: &[u8]) -> anyhow::Result<()> {
+        let conn = self.db.connect()?;
+        conn.execute(
+            "INSERT OR REPLACE INTO server_config (key, value) VALUES ('noise_sk', ?)",
+            [sk_bytes.to_vec()],
+        )
+        .await?;
         Ok(())
-    }
-
-    pub fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.conn.lock().unwrap()
     }
 }
