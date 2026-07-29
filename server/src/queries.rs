@@ -432,7 +432,7 @@ impl Database {
             Ok(r) => r,
             Err(_) => return false,
         };
-        matches!(rows.next().await.ok().flatten(), Some(_))
+        rows.next().await.ok().flatten().is_some()
     }
 
     pub async fn create_comment_trigger(
