@@ -2,27 +2,26 @@ use anyhow::Result;
 use chrono::Utc;
 use rand::RngCore;
 use rand::rngs::OsRng;
-use rusqlite::{Connection, params};
 
 use crate::db::Database;
 
-/// Errors that can occur during post submission.
 #[derive(Debug, thiserror::Error)]
 pub enum PostError {
     #[error("invalid ECDSA signature")]
     InvalidSignature,
     #[error("author is banned")]
     AuthorBanned,
+    #[error("not found")]
+    NotFound,
     #[error("database error: {0}")]
-    Database(#[from] rusqlite::Error),
+    Database(String),
 }
 
-/// Result of a post submission.
+#[derive(Debug)]
 pub struct PostResult {
     pub id: i64,
 }
 
-/// Result of a device registration attempt.
 pub struct RegisterResult {
     pub name: String,
     pub color: u8,
@@ -30,189 +29,278 @@ pub struct RegisterResult {
     pub is_banned: bool,
 }
 
-// ─── Private helper functions ───
-// Each takes &Connection — no locking, just SQL operations.
-// The caller (register_device) holds the lock for the entire transaction.
-
-/// Check if a device is banned.
-fn check_banned(conn: &Connection, pk_dev: &[u8]) -> bool {
-    let banned_at: Option<i64> = conn
-        .query_row(
-            "SELECT banned_at FROM devices WHERE pk_dev = ?",
-            params![pk_dev],
-            |row| row.get(0),
-        )
-        .ok()
-        .flatten();
-    banned_at.is_some()
+pub struct FeedResult {
+    pub posts: Vec<freesky_shared::types::PostEntry>,
+    pub next_cursor: Option<i64>,
 }
 
-/// Get the existing community group key.
-///
-/// The key must already exist (created via `rotate_group_key`). If no key
-/// exists, returns an error — the admin must trigger key-rotate first.
-fn get_group_key(conn: &Connection) -> Result<Vec<u8>> {
-    let key: Vec<u8> = conn
-        .query_row(
-            "SELECT mls_group_state FROM community WHERE id = 1",
-            [],
-            |row| row.get::<_, Vec<u8>>(0),
-        )
-        .map_err(|e| anyhow::anyhow!("no group key exists: {e}"))?;
-    Ok(key)
+#[derive(Debug)]
+pub struct ThreadResult {
+    pub post: freesky_shared::types::PostEntry,
+    pub replies: Vec<freesky_shared::types::PostEntry>,
 }
 
-/// Insert a new device or update an existing one's encrypted group key.
-/// Returns `true` if the device was newly inserted.
-fn upsert_device(
-    conn: &Connection,
-    pk_dev: &[u8],
-    name: &str,
-    color: u8,
-    encrypted_sk_comm: &[u8],
-    now: i64,
-) -> Result<bool> {
-    let exists: bool = conn
-        .query_row(
-            "SELECT 1 FROM devices WHERE pk_dev = ?",
-            params![pk_dev],
-            |_| Ok(true),
-        )
-        .unwrap_or(false);
+pub struct CreateCommentTriggerResult(pub bool);
 
-    if exists {
-        conn.execute(
-            "UPDATE devices SET encrypted_sk_comm = ?, last_seen_at = ? WHERE pk_dev = ?",
-            params![encrypted_sk_comm, now, pk_dev],
-        )?;
-        Ok(false)
-    } else {
-        conn.execute(
-            "INSERT INTO devices (pk_dev, user_name, user_color, encrypted_sk_comm, registered_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)",
-            params![pk_dev, name, color, encrypted_sk_comm, now, now],
-        )?;
-        Ok(true)
-    }
-}
-
-/// Increment the community member count.
-fn increment_member_count(conn: &Connection) -> Result<()> {
-    conn.execute(
-        "UPDATE community SET member_count = member_count + 1 WHERE id = 1",
-        [],
-    )?;
-    Ok(())
-}
-
-/// Get all registered device public keys (excluding banned devices).
-fn get_all_device_keys(conn: &Connection) -> Result<Vec<Vec<u8>>> {
-    let mut stmt = conn.prepare("SELECT pk_dev FROM devices WHERE banned_at IS NULL")?;
-    let rows = stmt
-        .query_map([], |row| row.get::<_, Vec<u8>>(0))?
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(rows)
-}
-
-/// Create or rotate the community group key.
-///
-/// Generates a new 32-byte group key, re-ECIES-encrypts it for every
-/// non-banned device, and stores it in `community.mls_group_state`.
-///
-/// If no community row exists yet, inserts one. Otherwise updates the existing row.
-///
-/// Returns the number of devices that received the new key.
-fn rotate_group_key_inner(conn: &Connection, now: i64) -> Result<usize> {
-    // 1. Generate a new group key
-    let mut new_key = [0u8; 32];
-    OsRng.fill_bytes(&mut new_key);
-
-    // 2. Get all non-banned device keys
-    let device_keys = get_all_device_keys(conn)?;
-
-    // 3. Re-ECIES the new key for each device
-    for pk_dev in &device_keys {
-        let encrypted = freesky_shared::crypto::ecies_encrypt(pk_dev, &new_key)
-            .map_err(|e| anyhow::anyhow!("ECIES encrypt failed for device: {e}"))?;
-        conn.execute(
-            "UPDATE devices SET encrypted_sk_comm = ?, last_seen_at = ? WHERE pk_dev = ?",
-            params![encrypted, now, pk_dev],
-        )?;
-    }
-
-    // 4. Insert or update the community group state
-    let existing: Option<Vec<u8>> = conn
-        .query_row(
-            "SELECT mls_group_state FROM community WHERE id = 1",
-            [],
-            |row| row.get::<_, Vec<u8>>(0),
-        )
-        .ok();
-
-    if existing.is_some() {
-        conn.execute(
-            "UPDATE community SET mls_group_state = ? WHERE id = 1",
-            params![new_key.as_slice()],
-        )?;
-    } else {
-        conn.execute(
-            "INSERT INTO community (id, mls_group_state, created_at, member_count) VALUES (1, ?, ?, ?)",
-            params![new_key.as_slice(), now, device_keys.len() as i64],
-        )?;
-    }
-
-    Ok(device_keys.len())
-}
-
-/// Verify ECDSA signature and store a post.
-///
-/// 1. Verifies the ECDSA secp256r1 signature over SHA-256(ciphertext_comm)
-/// 2. Checks if the author is banned
-/// 3. Inserts the post into the `posts` table
-fn submit_post_inner(
-    conn: &Connection,
-    req: &freesky_shared::types::PostRequest,
-) -> Result<PostResult, PostError> {
-    // 1. Verify ECDSA signature (SHA256withECDSA over ciphertext_comm)
-    if !freesky_shared::crypto::ecdsa_verify(&req.author_pk, &req.ciphertext_comm, &req.author_sig)
-    {
-        return Err(PostError::InvalidSignature);
-    }
-
-    // 2. Check if author is banned
-    if check_banned(conn, &req.author_pk) {
-        return Err(PostError::AuthorBanned);
-    }
-
-    // 3. Insert the post
-    conn.execute(
-        "INSERT INTO posts (ciphertext_comm, author_pk, author_sig, timestamp, mls_epoch) VALUES (?, ?, ?, ?, ?)",
-        params![
-            req.ciphertext_comm,
-            req.author_pk,
-            req.author_sig,
-            req.timestamp,
-            req.mls_epoch,
-        ],
-    )?;
-
-    let id = conn.last_insert_rowid();
-
-    Ok(PostResult { id })
-}
-
-// ─── Public API ───
+pub const MAX_FEED_LIMIT: u32 = 100;
+pub const DEFAULT_FEED_LIMIT: u32 = 50;
 
 impl Database {
-    /// Atomically register a device: check ban, get group key,
-    /// ECIES-encrypt it, upsert the device, and update member count.
-    ///
-    /// All operations happen under a single mutex lock (one transaction).
-    pub fn register_device(&self, pk_dev: &[u8]) -> Result<RegisterResult> {
-        let conn = self.conn(); // ← Single lock for the entire operation
+    async fn check_banned(&self, pk_dev: &[u8]) -> bool {
+        let conn = match self.db.connect() {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        let mut rows = match conn
+            .query(
+                "SELECT banned_at FROM devices WHERE pk_dev = ?",
+                [pk_dev.to_vec()],
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => return false,
+        };
+        match rows.next().await.ok().flatten() {
+            Some(row) => row.get::<Option<Vec<u8>>>(0).ok().flatten().is_some(),
+            None => false,
+        }
+    }
+
+    async fn get_group_key(&self) -> Result<Vec<u8>> {
+        let conn = self.db.connect()?;
+        let mut rows = conn
+            .query("SELECT mls_group_state FROM community WHERE id = 1", ())
+            .await?;
+        let row = rows
+            .next()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no group key exists"))?;
+        let key = row
+            .get::<Vec<u8>>(0)
+            .map_err(|e| anyhow::anyhow!("no group key exists: {e}"))?;
+        Ok(key)
+    }
+
+    async fn upsert_device(
+        &self,
+        pk_dev: &[u8],
+        name: &str,
+        color: u8,
+        encrypted_sk_comm: &[u8],
+        now: i64,
+    ) -> Result<bool> {
+        let conn = self.db.connect()?;
+        let mut rows = conn
+            .query("SELECT 1 FROM devices WHERE pk_dev = ?", [pk_dev.to_vec()])
+            .await?;
+        let exists = rows.next().await?.is_some();
+
+        if exists {
+            conn.execute(
+                "UPDATE devices SET encrypted_sk_comm = ?, last_seen_at = ? WHERE pk_dev = ?",
+                (encrypted_sk_comm.to_vec(), now, pk_dev.to_vec()),
+            )
+            .await?;
+            Ok(false)
+        } else {
+            conn.execute(
+                "INSERT INTO devices (pk_dev, user_name, user_color, encrypted_sk_comm, registered_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (pk_dev.to_vec(), name.to_string(), color as i64, encrypted_sk_comm.to_vec(), now, now),
+            )
+            .await?;
+            Ok(true)
+        }
+    }
+
+    async fn increment_member_count(&self) -> Result<()> {
+        let conn = self.db.connect()?;
+        conn.execute(
+            "UPDATE community SET member_count = member_count + 1 WHERE id = 1",
+            (),
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn get_all_device_keys(&self) -> Result<Vec<Vec<u8>>> {
+        let conn = self.db.connect()?;
+        let mut rows = conn
+            .query("SELECT pk_dev FROM devices WHERE banned_at IS NULL", ())
+            .await?;
+        let mut keys: Vec<Vec<u8>> = Vec::new();
+        while let Some(row) = rows.next().await? {
+            if let Ok(key) = row.get::<Vec<u8>>(0) {
+                keys.push(key);
+            }
+        }
+        Ok(keys)
+    }
+
+    async fn rotate_group_key_inner(&self, now: i64) -> Result<usize> {
+        let mut new_key = [0u8; 32];
+        OsRng.fill_bytes(&mut new_key);
+        let device_keys = self.get_all_device_keys().await?;
+
+        for pk_dev in &device_keys {
+            let encrypted = freesky_shared::crypto::ecies_encrypt(pk_dev, &new_key)
+                .map_err(|e| anyhow::anyhow!("ECIES encrypt failed: {e}"))?;
+            let conn = self.db.connect()?;
+            conn.execute(
+                "UPDATE devices SET encrypted_sk_comm = ?, last_seen_at = ? WHERE pk_dev = ?",
+                (encrypted, now, pk_dev.clone()),
+            )
+            .await?;
+        }
+
+        let conn = self.db.connect()?;
+        let mut rows = conn
+            .query("SELECT mls_group_state FROM community WHERE id = 1", ())
+            .await?;
+        let exists = rows.next().await?.is_some();
+
+        if exists {
+            conn.execute(
+                "UPDATE community SET mls_group_state = ? WHERE id = 1",
+                [new_key.to_vec()],
+            )
+            .await?;
+        } else {
+            conn.execute(
+                "INSERT INTO community (id, mls_group_state, created_at, member_count) VALUES (1, ?, ?, ?)",
+                (new_key.to_vec(), now, device_keys.len() as i64),
+            )
+            .await?;
+        }
+        Ok(device_keys.len())
+    }
+
+    async fn ensure_device_registered(&self, pk_dev: &[u8]) -> std::result::Result<(), PostError> {
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| PostError::Database(e.to_string()))?;
+        let mut existing = conn
+            .query("SELECT 1 FROM devices WHERE pk_dev = ?", [pk_dev.to_vec()])
+            .await
+            .map_err(|e| PostError::Database(e.to_string()))?;
+        if existing.next().await.map_err(|e| PostError::Database(e.to_string()))?.is_some() {
+            return Ok(());
+        }
+        drop(existing);
+
+        self.register_device(pk_dev).await.map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("no group key") {
+                // Cannot register — no group key is a setup problem, not a caller error.
+                // The device won't be able to post yet, but we don't return an
+                // AuthorBanned/InvalidSignature error.  Fall through to Database.
+            }
+            PostError::Database(msg)
+        })?;
+        Ok(())
+    }
+
+    async fn submit_post_inner(
+        &self,
+        req: &freesky_shared::types::PostRequest,
+    ) -> std::result::Result<PostResult, PostError> {
+        if !freesky_shared::crypto::ecdsa_verify(
+            &req.author_pk,
+            &req.ciphertext_comm,
+            &req.author_sig,
+        ) {
+            return Err(PostError::InvalidSignature);
+        }
+
+        if self.check_banned(&req.author_pk).await {
+            return Err(PostError::AuthorBanned);
+        }
+
+        self.ensure_device_registered(&req.author_pk).await?;
+
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| PostError::Database(e.to_string()))?;
+        let mut rows = conn
+            .query(
+                "INSERT INTO posts (ciphertext_comm, author_pk, author_sig, timestamp, mls_epoch, parent_id) \
+                 VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+                (
+                    req.ciphertext_comm.clone(),
+                    req.author_pk.clone(),
+                    req.author_sig.clone(),
+                    req.timestamp,
+                    req.mls_epoch as i64,
+                    req.parent_id,
+                ),
+            )
+            .await
+            .map_err(|e| PostError::Database(e.to_string()))?;
+
+        let id = rows
+            .next()
+            .await
+            .map_err(|e| PostError::Database(e.to_string()))?
+            .ok_or_else(|| PostError::Database("no rowid returned".to_string()))?
+            .get::<i64>(0)
+            .map_err(|e| PostError::Database(e.to_string()))?;
+
+        Ok(PostResult { id })
+    }
+
+    async fn fetch_feed_inner(
+        &self,
+        cursor: Option<i64>,
+        limit: Option<u32>,
+    ) -> Result<FeedResult> {
+        let clamped = limit.unwrap_or(DEFAULT_FEED_LIMIT).clamp(1, MAX_FEED_LIMIT);
+
+        let conn = self.db.connect()?;
+        let mut rows = if let Some(c) = cursor {
+            conn.query(
+                "SELECT id, ciphertext_comm, author_pk, author_sig, timestamp, mls_epoch, parent_id \
+                 FROM posts WHERE timestamp < ? ORDER BY timestamp DESC, id DESC LIMIT ?",
+                (c, clamped as i64),
+            )
+            .await?
+        } else {
+            conn.query(
+                "SELECT id, ciphertext_comm, author_pk, author_sig, timestamp, mls_epoch, parent_id \
+                 FROM posts ORDER BY timestamp DESC, id DESC LIMIT ?",
+                [clamped as i64],
+            )
+            .await?
+        };
+
+        let mut posts: Vec<freesky_shared::types::PostEntry> =
+            Vec::with_capacity(clamped as usize);
+        let mut last_ts: Option<i64> = None;
+        while let Some(row) = rows.next().await? {
+            let entry = freesky_shared::types::PostEntry {
+                id: row.get::<i64>(0)?,
+                ciphertext_comm: row.get::<Vec<u8>>(1)?,
+                author_pk: row.get::<Vec<u8>>(2)?,
+                author_sig: row.get::<Vec<u8>>(3)?,
+                timestamp: row.get::<i64>(4)?,
+                mls_epoch: row.get::<i64>(5)? as u64,
+                parent_id: row.get::<Option<i64>>(6)?,
+            };
+            last_ts = Some(entry.timestamp);
+            posts.push(entry);
+        }
+
+        let next_cursor = last_ts.filter(|_| posts.len() as u32 >= clamped);
+        Ok(FeedResult { posts, next_cursor })
+    }
+
+    // ─── Public API ───
+
+    pub async fn register_device(&self, pk_dev: &[u8]) -> Result<RegisterResult> {
         let now = Utc::now().timestamp();
 
-        // 1. Check if device is banned
-        if check_banned(&conn, pk_dev) {
+        if self.check_banned(pk_dev).await {
             return Ok(RegisterResult {
                 name: String::new(),
                 color: 0,
@@ -221,23 +309,19 @@ impl Database {
             });
         }
 
-        // 2. Derive deterministic identity from device key
         let name = freesky_shared::crypto::derive_name(pk_dev);
         let color = freesky_shared::crypto::derive_color(pk_dev);
 
-        // 3. Get the community group key (must exist — admin creates via key-rotate)
-        let group_key = get_group_key(&conn)?;
-
-        // 4. ECIES-encrypt the group key to this device's public key
+        let group_key = self.get_group_key().await?;
         let encrypted_sk_comm = freesky_shared::crypto::ecies_encrypt(pk_dev, &group_key)
             .map_err(|e| anyhow::anyhow!("ECIES encrypt failed: {e}"))?;
 
-        // 5. Insert or update the device record
-        let is_new = upsert_device(&conn, pk_dev, &name, color, &encrypted_sk_comm, now)?;
+        let is_new = self
+            .upsert_device(pk_dev, &name, color, &encrypted_sk_comm, now)
+            .await?;
 
-        // 6. Increment member count for new devices
         if is_new {
-            increment_member_count(&conn)?;
+            self.increment_member_count().await?;
         }
 
         Ok(RegisterResult {
@@ -248,26 +332,194 @@ impl Database {
         })
     }
 
-    /// Rotate the community group key.
-    ///
-    /// Generates a new 32-byte group key, re-ECIES-encrypts it for every
-    /// non-banned device, and updates the `community.mls_group_state`.
-    ///
-    /// Returns the number of devices that received the new key.
-    pub fn rotate_group_key(&self) -> Result<usize> {
-        let conn = self.conn();
+    pub async fn rotate_group_key(&self) -> Result<usize> {
         let now = Utc::now().timestamp();
-        rotate_group_key_inner(&conn, now)
+        self.rotate_group_key_inner(now).await
     }
 
-    /// Submit a post: verify ECDSA signature, check ban, store in DB.
-    ///
-    /// Returns the post ID on success, or a `PostError` on failure.
-    pub fn submit_post(
+    pub async fn submit_post(
         &self,
         req: &freesky_shared::types::PostRequest,
-    ) -> Result<PostResult, PostError> {
-        let conn = self.conn();
-        submit_post_inner(&conn, req)
+    ) -> std::result::Result<PostResult, PostError> {
+        self.submit_post_inner(req).await
+    }
+
+    pub async fn fetch_feed(
+        &self,
+        cursor: Option<i64>,
+        limit: Option<u32>,
+    ) -> Result<FeedResult> {
+        self.fetch_feed_inner(cursor, limit).await
+    }
+
+    pub async fn fetch_thread(
+        &self,
+        post_id: i64,
+    ) -> std::result::Result<ThreadResult, PostError> {
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| PostError::Database(e.to_string()))?;
+
+        // Recursive CTE: fetches parent post + all descendants in one query.
+        let mut rows = conn
+            .query(
+                "WITH RECURSIVE thread AS (
+                    SELECT id, ciphertext_comm, author_pk, author_sig, timestamp, mls_epoch, parent_id, 0 AS depth
+                    FROM posts WHERE id = ?
+                    UNION ALL
+                    SELECT p.id, p.ciphertext_comm, p.author_pk, p.author_sig, p.timestamp, p.mls_epoch, p.parent_id, t.depth + 1
+                    FROM posts p JOIN thread t ON p.parent_id = t.id
+                 )
+                 SELECT id, ciphertext_comm, author_pk, author_sig, timestamp, mls_epoch, parent_id, depth
+                 FROM thread ORDER BY depth, timestamp ASC",
+                [post_id],
+            )
+            .await
+            .map_err(|e| PostError::Database(e.to_string()))?;
+
+        let mut entries: Vec<(i64, freesky_shared::types::PostEntry)> = Vec::new();
+        while let Some(row) = rows.next().await.map_err(|e| PostError::Database(e.to_string()))? {
+            let entry = freesky_shared::types::PostEntry {
+                id: row.get::<i64>(0).map_err(|e| PostError::Database(e.to_string()))?,
+                ciphertext_comm: row.get::<Vec<u8>>(1).map_err(|e| PostError::Database(e.to_string()))?,
+                author_pk: row.get::<Vec<u8>>(2).map_err(|e| PostError::Database(e.to_string()))?,
+                author_sig: row.get::<Vec<u8>>(3).map_err(|e| PostError::Database(e.to_string()))?,
+                timestamp: row.get::<i64>(4).map_err(|e| PostError::Database(e.to_string()))?,
+                mls_epoch: row.get::<i64>(5).map_err(|e| PostError::Database(e.to_string()))? as u64,
+                parent_id: row.get::<Option<i64>>(6).map_err(|e| PostError::Database(e.to_string()))?,
+            };
+            let depth: i64 = row.get(7).map_err(|e| PostError::Database(e.to_string()))?;
+            entries.push((depth, entry));
+        }
+
+        if entries.is_empty() {
+            return Err(PostError::NotFound);
+        }
+
+        let (_, post) = entries.remove(0);
+        let replies: Vec<freesky_shared::types::PostEntry> = entries.into_iter().map(|(_, e)| e).collect();
+
+        Ok(ThreadResult { post, replies })
+    }
+
+    pub async fn parent_post_exists(&self, post_id: i64) -> bool {
+        let conn = match self.db.connect() {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        let mut rows = match conn
+            .query("SELECT 1 FROM posts WHERE id = ?", [post_id])
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => return false,
+        };
+        matches!(rows.next().await.ok().flatten(), Some(_))
+    }
+
+    pub async fn create_comment_trigger(&self) -> std::result::Result<CreateCommentTriggerResult, PostError> {
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| PostError::Database(e.to_string()))?;
+
+        // Drop trigger if it already exists (idempotent setup).
+        let _ = conn
+            .execute("DROP TRIGGER IF EXISTS validate_comment_parent", ())
+            .await;
+
+        conn.execute(
+            "CREATE TRIGGER validate_comment_parent
+             BEFORE INSERT ON posts
+             WHEN NEW.parent_id IS NOT NULL
+             BEGIN
+                 SELECT CASE
+                     WHEN NOT EXISTS (SELECT 1 FROM posts WHERE id = NEW.parent_id)
+                     THEN RAISE(ABORT, 'parent post not found')
+                 END;
+             END",
+            (),
+        )
+        .await
+        .map_err(|e| PostError::Database(e.to_string()))?;
+
+        Ok(CreateCommentTriggerResult(true))
+    }
+
+    pub async fn run_schema(&self) -> anyhow::Result<()> {
+        let conn = self.db.connect()?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS devices (
+                pk_dev             BLOB PRIMARY KEY,
+                user_name          TEXT NOT NULL,
+                user_color         INTEGER NOT NULL,
+                encrypted_sk_comm  BLOB,
+                registered_at      INTEGER NOT NULL,
+                banned_at          INTEGER,
+                last_seen_at       INTEGER
+            )",
+            (),
+        )
+        .await?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS community (
+                id              INTEGER PRIMARY KEY DEFAULT 1,
+                mls_group_state BLOB,
+                created_at      INTEGER NOT NULL,
+                member_count    INTEGER DEFAULT 1
+            )",
+            (),
+        )
+        .await?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS posts (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                ciphertext_comm BLOB NOT NULL,
+                author_pk       BLOB NOT NULL REFERENCES devices(pk_dev),
+                author_sig      BLOB NOT NULL,
+                timestamp       INTEGER NOT NULL,
+                mls_epoch       INTEGER NOT NULL,
+                parent_id       INTEGER REFERENCES posts(id)
+            )",
+            (),
+        )
+        .await?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS reports (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                post_id         INTEGER NOT NULL REFERENCES posts(id),
+                reporter_pk     BLOB NOT NULL REFERENCES devices(pk_dev),
+                reason          TEXT,
+                reported_at     INTEGER NOT NULL,
+                resolved_at     INTEGER,
+                resolution      TEXT
+            )",
+            (),
+        )
+        .await?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_posts_timestamp ON posts(timestamp DESC)",
+            (),
+        )
+        .await?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_pk)",
+            (),
+        )
+        .await?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS server_config (
+                key   TEXT PRIMARY KEY,
+                value BLOB NOT NULL
+            )",
+            (),
+        )
+        .await?;
+        Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "queries_test.rs"]
+mod tests;

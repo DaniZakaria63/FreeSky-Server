@@ -26,8 +26,8 @@ pub async fn register(
         return Json(freesky_shared::types::ApiResponse::error("invalid pk_dev"));
     }
 
-    // Single atomic database operation (one lock, all steps together)
-    let result = match state.db.register_device(&req.pk_dev) {
+    // Single atomic database operation
+    let result = match state.db.register_device(&req.pk_dev).await {
         Ok(r) => r,
         Err(e) => {
             let msg = e.to_string();
@@ -68,6 +68,15 @@ pub async fn register(
     ))
 }
 
+#[instrument(skip(state))]
+pub async fn server_pk(
+    State(state): State<Arc<AppState>>,
+) -> Json<freesky_shared::types::ApiResponse<Vec<u8>>> {
+    let pk = state.noise.pk_server_bytes().to_vec();
+    tracing::debug!("server-pk request: returning {} bytes", pk.len());
+    Json(freesky_shared::types::ApiResponse::success(pk))
+}
+
 #[allow(dead_code)]
 #[instrument(skip(state, req))]
 pub async fn submit_post(
@@ -85,7 +94,7 @@ pub async fn submit_post(
     }
 
     // Store the post (DB layer verifies ECDSA signature + checks ban)
-    match state.db.submit_post(&req) {
+    match state.db.submit_post(&req).await {
         Ok(result) => {
             tracing::info!("post stored: id={}", result.id);
             Json(freesky_shared::types::ApiResponse::success(()))

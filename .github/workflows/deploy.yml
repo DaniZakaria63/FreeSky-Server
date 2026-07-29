@@ -1,0 +1,24 @@
+name: Deploy
+
+on:
+  push:
+    branches: [master]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p freesky-server
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H -p 15220 ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts
+      - name: Deploy binary
+        run: |
+          rsync -avz --delete -e "ssh -p 15220" target/release/freesky-server ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/usr/local/bin/freesky-server
+          ssh -p 15220 ${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }} systemctl restart freesky-server

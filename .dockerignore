@@ -1,8 +1,8 @@
-.env
 target/
+.git/
+.idea/
 *.log
 community.db
-.idea/
-.commandcode/
+.env
 .poolside/
-*.swp
+.commandcode/
