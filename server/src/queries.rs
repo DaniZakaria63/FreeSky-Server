@@ -184,7 +184,12 @@ impl Database {
             .query("SELECT 1 FROM devices WHERE pk_dev = ?", [pk_dev.to_vec()])
             .await
             .map_err(|e| PostError::Database(e.to_string()))?;
-        if existing.next().await.map_err(|e| PostError::Database(e.to_string()))?.is_some() {
+        if existing
+            .next()
+            .await
+            .map_err(|e| PostError::Database(e.to_string()))?
+            .is_some()
+        {
             return Ok(());
         }
         drop(existing);
@@ -274,8 +279,7 @@ impl Database {
             .await?
         };
 
-        let mut posts: Vec<freesky_shared::types::PostEntry> =
-            Vec::with_capacity(clamped as usize);
+        let mut posts: Vec<freesky_shared::types::PostEntry> = Vec::with_capacity(clamped as usize);
         let mut last_ts: Option<i64> = None;
         while let Some(row) = rows.next().await? {
             let entry = freesky_shared::types::PostEntry {
@@ -344,18 +348,11 @@ impl Database {
         self.submit_post_inner(req).await
     }
 
-    pub async fn fetch_feed(
-        &self,
-        cursor: Option<i64>,
-        limit: Option<u32>,
-    ) -> Result<FeedResult> {
+    pub async fn fetch_feed(&self, cursor: Option<i64>, limit: Option<u32>) -> Result<FeedResult> {
         self.fetch_feed_inner(cursor, limit).await
     }
 
-    pub async fn fetch_thread(
-        &self,
-        post_id: i64,
-    ) -> std::result::Result<ThreadResult, PostError> {
+    pub async fn fetch_thread(&self, post_id: i64) -> std::result::Result<ThreadResult, PostError> {
         let conn = self
             .db
             .connect()
@@ -379,15 +376,34 @@ impl Database {
             .map_err(|e| PostError::Database(e.to_string()))?;
 
         let mut entries: Vec<(i64, freesky_shared::types::PostEntry)> = Vec::new();
-        while let Some(row) = rows.next().await.map_err(|e| PostError::Database(e.to_string()))? {
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| PostError::Database(e.to_string()))?
+        {
             let entry = freesky_shared::types::PostEntry {
-                id: row.get::<i64>(0).map_err(|e| PostError::Database(e.to_string()))?,
-                ciphertext_comm: row.get::<Vec<u8>>(1).map_err(|e| PostError::Database(e.to_string()))?,
-                author_pk: row.get::<Vec<u8>>(2).map_err(|e| PostError::Database(e.to_string()))?,
-                author_sig: row.get::<Vec<u8>>(3).map_err(|e| PostError::Database(e.to_string()))?,
-                timestamp: row.get::<i64>(4).map_err(|e| PostError::Database(e.to_string()))?,
-                mls_epoch: row.get::<i64>(5).map_err(|e| PostError::Database(e.to_string()))? as u64,
-                parent_id: row.get::<Option<i64>>(6).map_err(|e| PostError::Database(e.to_string()))?,
+                id: row
+                    .get::<i64>(0)
+                    .map_err(|e| PostError::Database(e.to_string()))?,
+                ciphertext_comm: row
+                    .get::<Vec<u8>>(1)
+                    .map_err(|e| PostError::Database(e.to_string()))?,
+                author_pk: row
+                    .get::<Vec<u8>>(2)
+                    .map_err(|e| PostError::Database(e.to_string()))?,
+                author_sig: row
+                    .get::<Vec<u8>>(3)
+                    .map_err(|e| PostError::Database(e.to_string()))?,
+                timestamp: row
+                    .get::<i64>(4)
+                    .map_err(|e| PostError::Database(e.to_string()))?,
+                mls_epoch: row
+                    .get::<i64>(5)
+                    .map_err(|e| PostError::Database(e.to_string()))?
+                    as u64,
+                parent_id: row
+                    .get::<Option<i64>>(6)
+                    .map_err(|e| PostError::Database(e.to_string()))?,
             };
             let depth: i64 = row.get(7).map_err(|e| PostError::Database(e.to_string()))?;
             entries.push((depth, entry));
@@ -398,7 +414,8 @@ impl Database {
         }
 
         let (_, post) = entries.remove(0);
-        let replies: Vec<freesky_shared::types::PostEntry> = entries.into_iter().map(|(_, e)| e).collect();
+        let replies: Vec<freesky_shared::types::PostEntry> =
+            entries.into_iter().map(|(_, e)| e).collect();
 
         Ok(ThreadResult { post, replies })
     }
@@ -418,7 +435,9 @@ impl Database {
         matches!(rows.next().await.ok().flatten(), Some(_))
     }
 
-    pub async fn create_comment_trigger(&self) -> std::result::Result<CreateCommentTriggerResult, PostError> {
+    pub async fn create_comment_trigger(
+        &self,
+    ) -> std::result::Result<CreateCommentTriggerResult, PostError> {
         let conn = self
             .db
             .connect()

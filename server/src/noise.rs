@@ -61,11 +61,18 @@ fn noise_hkdf(ck: &[u8], input: &[u8], count: usize) -> Vec<Vec<u8>> {
 /// Logs intermediate values to help diagnose handshake failures.
 fn debug_noise_state(msg1: &[u8], sk_server: &SecretKey, prologue: &[u8]) {
     if msg1.len() < 65 {
-        tracing::error!("DEBUG_NOISE: msg1 too short ({} bytes, need >=65)", msg1.len());
+        tracing::error!(
+            "DEBUG_NOISE: msg1 too short ({} bytes, need >=65)",
+            msg1.len()
+        );
         return;
     }
     let epk = &msg1[..65];
-    let pk_server = sk_server.public_key().to_encoded_point(false).to_bytes().to_vec();
+    let pk_server = sk_server
+        .public_key()
+        .to_encoded_point(false)
+        .to_bytes()
+        .to_vec();
 
     tracing::error!("DEBUG_NOISE: server_pk    = {}", hex::encode(&pk_server));
 
@@ -109,32 +116,43 @@ fn debug_noise_state(msg1: &[u8], sk_server: &SecretKey, prologue: &[u8]) {
         diffie_hellman(s_scalar, re_pk.as_affine())
     };
     let shared_bytes = shared.raw_secret_bytes();
-    tracing::error!("DEBUG_NOISE: shared (DH)     = {}", hex::encode(shared_bytes));
+    tracing::error!(
+        "DEBUG_NOISE: shared (DH)     = {}",
+        hex::encode(shared_bytes)
+    );
 
     let hkdf_out = noise_hkdf(&ck, shared_bytes, 2);
-    tracing::error!("DEBUG_NOISE: new_ck          = {}", hex::encode(&hkdf_out[0]));
-    tracing::error!("DEBUG_NOISE: cipher_key      = {}", hex::encode(&hkdf_out[1]));
+    tracing::error!(
+        "DEBUG_NOISE: new_ck          = {}",
+        hex::encode(&hkdf_out[0])
+    );
+    tracing::error!(
+        "DEBUG_NOISE: cipher_key      = {}",
+        hex::encode(&hkdf_out[1])
+    );
 
     // Decrypt: EncryptAndHash uses nonce=0, AAD=h_3
     if msg1.len() >= 81 {
         let tag = &msg1[65..81];
         tracing::error!("DEBUG_NOISE: tag (from msg1) = {}", hex::encode(tag));
 
-        let result = chacha20poly1305::ChaCha20Poly1305::new(
-            GenericArray::from_slice(&hkdf_out[1]),
-        )
-        .decrypt_in_place_detached(
-            &[0u8; 12].into(),
-            &h,
-            &mut [][..],
-            GenericArray::from_slice(tag),
-        );
+        let result =
+            chacha20poly1305::ChaCha20Poly1305::new(GenericArray::from_slice(&hkdf_out[1]))
+                .decrypt_in_place_detached(
+                    &[0u8; 12].into(),
+                    &h,
+                    &mut [][..],
+                    GenericArray::from_slice(tag),
+                );
         match result {
             Ok(()) => tracing::error!("DEBUG_NOISE: tag DECRYPTION SUCCESSFUL"),
             Err(e) => tracing::error!("DEBUG_NOISE: tag DECRYPTION FAILED: {e:?}"),
         }
     } else {
-        tracing::error!("DEBUG_NOISE: msg1 too short for tag (need 81, got {})", msg1.len());
+        tracing::error!(
+            "DEBUG_NOISE: msg1 too short for tag (need 81, got {})",
+            msg1.len()
+        );
     }
 }
 
@@ -539,9 +557,8 @@ mod tests {
             .to_encoded_point(false)
             .to_bytes()
             .to_vec();
-        let pattern: snow::params::NoiseParams = "Noise_NK_P256_ChaChaPoly_BLAKE2s"
-            .parse()
-            .unwrap();
+        let pattern: snow::params::NoiseParams =
+            "Noise_NK_P256_ChaChaPoly_BLAKE2s".parse().unwrap();
 
         let mut initiator = snow::Builder::new(pattern.clone())
             .prologue(prologue)
@@ -579,9 +596,8 @@ mod tests {
             .to_encoded_point(false)
             .to_bytes()
             .to_vec();
-        let pattern: snow::params::NoiseParams = "Noise_NK_P256_ChaChaPoly_BLAKE2s"
-            .parse()
-            .unwrap();
+        let pattern: snow::params::NoiseParams =
+            "Noise_NK_P256_ChaChaPoly_BLAKE2s".parse().unwrap();
         let mut responder = Builder::new(pattern.clone())
             .prologue(prologue)
             .unwrap()
@@ -711,20 +727,17 @@ mod tests {
 
         let mut nonce_bytes = [0u8; 12];
         nonce_bytes[4..].copy_from_slice(&0u64.to_le_bytes());
-        let tag = chacha20poly1305::ChaCha20Poly1305::new(
-            &GenericArray::from_slice(cipher_key),
-        )
-        .encrypt_in_place_detached(&nonce_bytes.into(), &h, &mut [][..])
-        .unwrap();
+        let tag = chacha20poly1305::ChaCha20Poly1305::new(&GenericArray::from_slice(cipher_key))
+            .encrypt_in_place_detached(&nonce_bytes.into(), &h, &mut [][..])
+            .unwrap();
 
         h = blake2s(&[&h[..], &tag].concat());
 
         let msg1 = [&eph_pk_bytes[..], &tag].concat();
         assert_eq!(msg1.len(), 81);
 
-        let pattern: snow::params::NoiseParams = "Noise_NK_P256_ChaChaPoly_BLAKE2s"
-            .parse()
-            .unwrap();
+        let pattern: snow::params::NoiseParams =
+            "Noise_NK_P256_ChaChaPoly_BLAKE2s".parse().unwrap();
         let mut snow_resp = snow::Builder::new(pattern)
             .prologue(prologue)
             .unwrap()
@@ -759,11 +772,9 @@ mod tests {
         let cipher_key2 = &hkdf_out2[1];
 
         let enc_payload = &msg2[65..len2];
-        chacha20poly1305::ChaCha20Poly1305::new(
-            &GenericArray::from_slice(cipher_key2),
-        )
-        .decrypt_in_place_detached(&[0u8; 12].into(), &h, &mut [][..], enc_payload.into())
-        .expect("msg2 decrypt failed");
+        chacha20poly1305::ChaCha20Poly1305::new(&GenericArray::from_slice(cipher_key2))
+            .decrypt_in_place_detached(&[0u8; 12].into(), &h, &mut [][..], enc_payload.into())
+            .expect("msg2 decrypt failed");
 
         let _ = blake2s(&[&h[..], enc_payload].concat());
 
@@ -771,17 +782,17 @@ mod tests {
 
         let mut transport = snow_resp.into_transport_mode().unwrap();
         let mut enc = [0u8; 512];
-        let elen = transport.write_message(b"hello from server", &mut enc).unwrap();
+        let elen = transport
+            .write_message(b"hello from server", &mut enc)
+            .unwrap();
         let (ct, tag_bytes) = enc[..elen].split_at(elen - 16);
-        chacha20poly1305::ChaCha20Poly1305::new(
-            &GenericArray::from_slice(&split_out[1]),
-        )
-        .decrypt_in_place_detached(
-            &[0u8; 12].into(),
-            &[],
-            &mut ct.to_vec(),
-            GenericArray::from_slice(tag_bytes),
-        )
-        .expect("transport decrypt failed");
+        chacha20poly1305::ChaCha20Poly1305::new(&GenericArray::from_slice(&split_out[1]))
+            .decrypt_in_place_detached(
+                &[0u8; 12].into(),
+                &[],
+                &mut ct.to_vec(),
+                GenericArray::from_slice(tag_bytes),
+            )
+            .expect("transport decrypt failed");
     }
 }
