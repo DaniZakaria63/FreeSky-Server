@@ -420,6 +420,34 @@ impl Database {
         Ok(ThreadResult { post, replies })
     }
 
+    pub async fn submit_report(
+        &self,
+        req: &freesky_shared::types::ReportRequest,
+    ) -> std::result::Result<(), PostError> {
+        if !self.parent_post_exists(req.post_id).await {
+            return Err(PostError::NotFound);
+        }
+        self.ensure_device_registered(&req.reporter_pk).await?;
+
+        let conn = self
+            .db
+            .connect()
+            .map_err(|e| PostError::Database(e.to_string()))?;
+        let now = Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO reports (post_id, reporter_pk, reason, reported_at) VALUES (?, ?, ?, ?)",
+            (
+                req.post_id,
+                req.reporter_pk.clone(),
+                req.reason.clone(),
+                now,
+            ),
+        )
+        .await
+        .map_err(|e| PostError::Database(e.to_string()))?;
+        Ok(())
+    }
+
     pub async fn parent_post_exists(&self, post_id: i64) -> bool {
         let conn = match self.db.connect() {
             Ok(c) => c,

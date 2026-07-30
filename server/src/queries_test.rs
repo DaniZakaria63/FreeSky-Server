@@ -35,7 +35,7 @@ async fn test_db() -> Database {
         )",
     ];
     for sql in &schema {
-        conn.execute(*sql, ()).await.unwrap();
+        conn.execute(sql, ()).await.unwrap();
     }
     conn.execute(
         "INSERT INTO community (id, mls_group_state, created_at, member_count) VALUES (1, ?, 0, 1)",

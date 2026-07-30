@@ -536,9 +536,20 @@ async fn route_noise_request(
                 }
             }
         }
-        NoiseApiRequest::Report(_req) => {
-            tracing::debug!("noise report request");
-            serde_json::json!({ "message": "not implemented", "data": null })
+        NoiseApiRequest::Report(req) => {
+            tracing::debug!(post_id = req.post_id, "noise report request");
+            match state.db.submit_report(&req).await {
+                Ok(_) => {
+                    serde_json::json!({ "message": "success", "data": null })
+                }
+                Err(crate::queries::PostError::NotFound) => {
+                    serde_json::json!({ "message": "post not found", "data": null })
+                }
+                Err(e) => {
+                    tracing::error!("noise report db error: {e}");
+                    serde_json::json!({ "message": "internal error", "data": null })
+                }
+            }
         }
     }
 }
@@ -727,7 +738,7 @@ mod tests {
 
         let mut nonce_bytes = [0u8; 12];
         nonce_bytes[4..].copy_from_slice(&0u64.to_le_bytes());
-        let tag = chacha20poly1305::ChaCha20Poly1305::new(&GenericArray::from_slice(cipher_key))
+        let tag = chacha20poly1305::ChaCha20Poly1305::new(GenericArray::from_slice(cipher_key))
             .encrypt_in_place_detached(&nonce_bytes.into(), &h, &mut [][..])
             .unwrap();
 
@@ -772,7 +783,7 @@ mod tests {
         let cipher_key2 = &hkdf_out2[1];
 
         let enc_payload = &msg2[65..len2];
-        chacha20poly1305::ChaCha20Poly1305::new(&GenericArray::from_slice(cipher_key2))
+        chacha20poly1305::ChaCha20Poly1305::new(GenericArray::from_slice(cipher_key2))
             .decrypt_in_place_detached(&[0u8; 12].into(), &h, &mut [][..], enc_payload.into())
             .expect("msg2 decrypt failed");
 
@@ -786,7 +797,7 @@ mod tests {
             .write_message(b"hello from server", &mut enc)
             .unwrap();
         let (ct, tag_bytes) = enc[..elen].split_at(elen - 16);
-        chacha20poly1305::ChaCha20Poly1305::new(&GenericArray::from_slice(&split_out[1]))
+        chacha20poly1305::ChaCha20Poly1305::new(GenericArray::from_slice(&split_out[1]))
             .decrypt_in_place_detached(
                 &[0u8; 12].into(),
                 &[],
