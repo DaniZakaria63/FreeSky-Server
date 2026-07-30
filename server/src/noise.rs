@@ -518,9 +518,20 @@ async fn route_noise_request(
                 }
             }
         }
-        NoiseApiRequest::Report(_req) => {
-            tracing::debug!("noise report request");
-            serde_json::json!({ "message": "not implemented", "data": null })
+        NoiseApiRequest::Report(req) => {
+            tracing::debug!(post_id = req.post_id, "noise report request");
+            match state.db.submit_report(&req).await {
+                Ok(_) => {
+                    serde_json::json!({ "message": "success", "data": null })
+                }
+                Err(crate::queries::PostError::NotFound) => {
+                    serde_json::json!({ "message": "post not found", "data": null })
+                }
+                Err(e) => {
+                    tracing::error!("noise report db error: {e}");
+                    serde_json::json!({ "message": "internal error", "data": null })
+                }
+            }
         }
     }
 }
