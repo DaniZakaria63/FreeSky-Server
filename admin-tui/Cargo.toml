@@ -11,17 +11,12 @@ crossterm = "0.28"
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
 
-# HTTP client
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# HTTP client (blocking — this is a CLI tool, not async)
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
-# Crypto
-x25519-dalek = "2"
-ed25519-dalek = "2"
-chacha20poly1305 = "0.10"
 
 # Encoding
 hex = "0.4"
@@ -31,14 +26,8 @@ base64 = "0.22"
 anyhow = "1"
 thiserror = "2"
 
-# Async
-tokio = { version = "1", features = ["full"] }
-
 # Time
 chrono = "0.4"
 
 # Logging
 tracing = "0.1"
-
-[dependencies.freesky-shared]
-path = "../shared"
