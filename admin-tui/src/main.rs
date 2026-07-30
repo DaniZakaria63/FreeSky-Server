@@ -36,8 +36,8 @@ fn resolve_db_path() -> String {
     std::env::var("TURSO_URL")
         .ok()
         .and_then(|url| {
-            if url.starts_with("file://") {
-                Some(url[7..].to_string())
+            if let Some(stripped) = url.strip_prefix("file://") {
+                Some(stripped.to_string())
             } else if !url.contains("://") {
                 Some(url)
             } else {

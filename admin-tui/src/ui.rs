@@ -316,7 +316,7 @@ fn render_user_detail(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn render_actions(frame: &mut Frame, area: Rect) {
-    let actions = vec![
+    let actions = [
         "[1] Search user  [2] Ban/Unban  [3] Key rotate  [4] Kick member",
         "[5] Resolve report  [↑↓] Select  [Tab] Search  [Q] Quit",
     ];

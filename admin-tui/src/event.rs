@@ -147,11 +147,11 @@ pub fn handle_event(app: &mut App) -> Result<()> {
                         if app.devices.is_empty() {
                             app.log("! No users found".to_string());
                         }
-                    } else if let Some(idx) = app.selected_device {
-                        if idx < app.devices.len() {
-                            app.device_detail = Some(app.devices[idx].clone());
-                            app.mode = Mode::UserDetail;
-                        }
+                    } else if let Some(idx) = app.selected_device
+                        && idx < app.devices.len()
+                    {
+                        app.device_detail = Some(app.devices[idx].clone());
+                        app.mode = Mode::UserDetail;
                     }
                 }
                 KeyCode::Backspace => {
