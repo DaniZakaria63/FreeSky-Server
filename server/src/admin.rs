@@ -9,7 +9,10 @@ use tracing::instrument;
 
 use crate::AppState;
 
-fn verify_app_key(headers: &HeaderMap, expected: &str) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+fn verify_app_key(
+    headers: &HeaderMap,
+    expected: &str,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
     let provided = headers
         .get("x-app-key")
         .and_then(|v| v.to_str().ok())
@@ -44,7 +47,10 @@ pub struct KeyRotateResponse {
 pub async fn health(
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,
-) -> Result<Json<freesky_shared::types::ApiResponse<HealthResponse>>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<
+    Json<freesky_shared::types::ApiResponse<HealthResponse>>,
+    (StatusCode, Json<serde_json::Value>),
+> {
     verify_app_key(&headers, &state.trusted_app_key)?;
     Ok(Json(freesky_shared::types::ApiResponse::success(
         HealthResponse { ok: true },
@@ -58,14 +64,19 @@ pub async fn kick_member(
 ) -> Result<Json<freesky_shared::types::ApiResponse<()>>, (StatusCode, Json<serde_json::Value>)> {
     verify_app_key(&headers, &state.trusted_app_key)?;
     tracing::debug!("kick_member request received");
-    Ok(Json(freesky_shared::types::ApiResponse::error("not implemented")))
+    Ok(Json(freesky_shared::types::ApiResponse::error(
+        "not implemented",
+    )))
 }
 
 #[instrument(skip(state))]
 pub async fn key_rotate(
     headers: HeaderMap,
     State(state): State<Arc<AppState>>,
-) -> Result<Json<freesky_shared::types::ApiResponse<KeyRotateResponse>>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<
+    Json<freesky_shared::types::ApiResponse<KeyRotateResponse>>,
+    (StatusCode, Json<serde_json::Value>),
+> {
     verify_app_key(&headers, &state.trusted_app_key)?;
     tracing::debug!("key_rotate request received");
 

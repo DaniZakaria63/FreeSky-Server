@@ -20,8 +20,8 @@ pub struct AppState {
 async fn main() -> anyhow::Result<()> {
     logging::init()?;
 
-    let turso_url = std::env::var("TURSO_URL")
-        .map_err(|_| anyhow::anyhow!("TURSO_URL must be set"))?;
+    let turso_url =
+        std::env::var("TURSO_URL").map_err(|_| anyhow::anyhow!("TURSO_URL must be set"))?;
     let turso_token = std::env::var("TURSO_AUTH_TOKEN").unwrap_or_default();
 
     let db = Database::connect(&turso_url, &turso_token).await?;

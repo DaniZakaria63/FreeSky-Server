@@ -1,9 +1,9 @@
 use chrono::{DateTime, Utc};
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
-use ratatui::Frame;
 
 use crate::app::{App, Mode};
 
@@ -94,32 +94,59 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
 fn render_stats(app: &App, frame: &mut Frame, area: Rect) {
     let layout = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Ratio(1, 3), Constraint::Ratio(1, 3), Constraint::Ratio(1, 3)])
+        .constraints([
+            Constraint::Ratio(1, 3),
+            Constraint::Ratio(1, 3),
+            Constraint::Ratio(1, 3),
+        ])
         .split(area);
 
     let s = &app.stats;
-    render_stat_box(frame, layout[0], "Users", &[
-        format!("Total users:  {}", s.total_users),
-        format!("Active users: {}", s.active_users),
-        format!("Banned users: {}", s.banned_users),
-    ], Color::Cyan);
+    render_stat_box(
+        frame,
+        layout[0],
+        "Users",
+        &[
+            format!("Total users:  {}", s.total_users),
+            format!("Active users: {}", s.active_users),
+            format!("Banned users: {}", s.banned_users),
+        ],
+        Color::Cyan,
+    );
 
-    render_stat_box(frame, layout[1], "Posts", &[
-        format!("Total posts: {}", s.total_posts),
-        format!("Posts today: {}", s.today_posts),
-        String::new(),
-    ], Color::Green);
+    render_stat_box(
+        frame,
+        layout[1],
+        "Posts",
+        &[
+            format!("Total posts: {}", s.total_posts),
+            format!("Posts today: {}", s.today_posts),
+            String::new(),
+        ],
+        Color::Green,
+    );
 
-    render_stat_box(frame, layout[2], "Reports", &[
-        format!("Total reports:     {}", s.total_reports),
-        format!("Unresolved reports: {}", s.unresolved_reports),
-        String::new(),
-    ], Color::Yellow);
+    render_stat_box(
+        frame,
+        layout[2],
+        "Reports",
+        &[
+            format!("Total reports:     {}", s.total_reports),
+            format!("Unresolved reports: {}", s.unresolved_reports),
+            String::new(),
+        ],
+        Color::Yellow,
+    );
 }
 
 fn render_stat_box(frame: &mut Frame, area: Rect, title: &str, lines: &[String], color: Color) {
     let inner = area.inner(Margin::new(1, 0));
-    let text = Text::from(lines.iter().map(|l| Line::from(Span::raw(l.as_str()))).collect::<Vec<_>>());
+    let text = Text::from(
+        lines
+            .iter()
+            .map(|l| Line::from(Span::raw(l.as_str())))
+            .collect::<Vec<_>>(),
+    );
     let block = Block::default()
         .title(title)
         .title_style(Style::new().fg(color).bold())
@@ -152,7 +179,10 @@ fn render_reports_panel(app: &App, frame: &mut Frame, area: Rect) {
             let reason = r.reason.as_deref().unwrap_or("no reason");
             ListItem::new(format!(
                 "{}{}  {}  {}",
-                prefix, r.user_name, reason, format_ts(r.reported_at)
+                prefix,
+                r.user_name,
+                reason,
+                format_ts(r.reported_at)
             ))
         })
         .collect();
@@ -183,12 +213,15 @@ fn render_community_panel(app: &App, frame: &mut Frame, area: Rect) {
     };
 
     let mut text = vec![
-        Line::from(vec![
-            Span::styled("Community Key", Style::new().bold()),
-        ]),
-        Line::from(vec![
-            Span::styled(key_status, Style::new().fg(if c.has_group_key { Color::Green } else { Color::Red })),
-        ]),
+        Line::from(vec![Span::styled("Community Key", Style::new().bold())]),
+        Line::from(vec![Span::styled(
+            key_status,
+            Style::new().fg(if c.has_group_key {
+                Color::Green
+            } else {
+                Color::Red
+            }),
+        )]),
         Line::from(Span::raw("")),
         Line::from(Span::raw(format!("Members: {}", c.member_count))),
         Line::from(Span::raw(format!("Created: {}", created))),
@@ -211,11 +244,7 @@ fn render_community_panel(app: &App, frame: &mut Frame, area: Rect) {
             } else {
                 "  "
             };
-            let status = if d.banned_at.is_some() {
-                " BANNED"
-            } else {
-                ""
-            };
+            let status = if d.banned_at.is_some() { " BANNED" } else { "" };
             text.push(Line::from(Span::raw(format!(
                 "{}{}  {} posts{}",
                 cursor, d.user_name, d.post_count, status
@@ -237,26 +266,28 @@ fn render_user_detail(app: &App, frame: &mut Frame, area: Rect) {
     if let Some(ref d) = app.device_detail {
         let color_idx = d.user_color as usize % 16;
         let lines = vec![
-            Line::from(vec![
-                Span::styled("User Detail", Style::new().bold()),
-            ]),
+            Line::from(vec![Span::styled("User Detail", Style::new().bold())]),
             Line::from(Span::raw("")),
             Line::from(vec![
                 Span::styled("Name: ", Style::new().dim()),
                 Span::styled(&d.user_name, Style::new().fg(COLORS[color_idx])),
             ]),
+            Line::from(Span::raw(format!("pk_dev: {}", hex::encode(&d.pk_dev)))),
             Line::from(Span::raw(format!(
-                "pk_dev: {}",
-                hex::encode(&d.pk_dev)
+                "Registered: {}",
+                format_ts(d.registered_at)
             ))),
-            Line::from(Span::raw(format!("Registered: {}", format_ts(d.registered_at)))),
             Line::from(Span::raw(format!(
                 "Banned: {}",
-                d.banned_at.map(format_ts).unwrap_or_else(|| "No".to_string())
+                d.banned_at
+                    .map(format_ts)
+                    .unwrap_or_else(|| "No".to_string())
             ))),
             Line::from(Span::raw(format!(
                 "Last seen: {}",
-                d.last_seen_at.map(format_ts).unwrap_or_else(|| "Never".to_string())
+                d.last_seen_at
+                    .map(format_ts)
+                    .unwrap_or_else(|| "Never".to_string())
             ))),
             Line::from(Span::raw(format!("Posts: {}", d.post_count))),
             Line::from(Span::raw("")),

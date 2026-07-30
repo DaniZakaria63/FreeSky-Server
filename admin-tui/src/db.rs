@@ -54,34 +54,34 @@ impl AdminDb {
         let total_users: i64 = self
             .conn
             .query_row("SELECT COUNT(*) FROM devices", [], |r| r.get(0))?;
-        let active_users: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM devices WHERE banned_at IS NULL", [], |r| r.get(0))?;
-        let banned_users: i64 = self
-            .conn
-            .query_row("SELECT COUNT(*) FROM devices WHERE banned_at IS NOT NULL", [], |r| r.get(0))?;
+        let active_users: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM devices WHERE banned_at IS NULL",
+            [],
+            |r| r.get(0),
+        )?;
+        let banned_users: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM devices WHERE banned_at IS NOT NULL",
+            [],
+            |r| r.get(0),
+        )?;
         let total_posts: i64 = self
             .conn
             .query_row("SELECT COUNT(*) FROM posts", [], |r| r.get(0))?;
         let today_start = Utc::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
         let today_ts = today_start.and_utc().timestamp();
-        let today_posts: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM posts WHERE timestamp >= ?",
-                [today_ts],
-                |r| r.get(0),
-            )?;
+        let today_posts: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM posts WHERE timestamp >= ?",
+            [today_ts],
+            |r| r.get(0),
+        )?;
         let total_reports: i64 = self
             .conn
             .query_row("SELECT COUNT(*) FROM reports", [], |r| r.get(0))?;
-        let unresolved_reports: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM reports WHERE resolved_at IS NULL",
-                [],
-                |r| r.get(0),
-            )?;
+        let unresolved_reports: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM reports WHERE resolved_at IS NULL",
+            [],
+            |r| r.get(0),
+        )?;
         Ok(Stats {
             total_users,
             active_users,

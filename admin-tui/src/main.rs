@@ -17,10 +17,12 @@ fn load_app_key() -> Result<String> {
         .position(|a| a == "--app-key")
         .and_then(|pos| std::env::args().nth(pos + 1))
         .or_else(|| std::env::var("APP_KEY").ok())
-        .ok_or_else(|| anyhow::anyhow!(
-            "missing app key\n  usage: {} --app-key <SHA1>\n  or set APP_KEY env var",
-            std::env::args().next().as_deref().unwrap_or("admin-tui")
-        ))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "missing app key\n  usage: {} --app-key <SHA1>\n  or set APP_KEY env var",
+                std::env::args().next().as_deref().unwrap_or("admin-tui")
+            )
+        })?;
 
     let normalized = raw.trim().to_uppercase().replace(':', "");
     if normalized.len() != 40 || !normalized.chars().all(|c| c.is_ascii_hexdigit()) {

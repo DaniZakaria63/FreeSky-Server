@@ -14,7 +14,8 @@ pub struct Database {
 impl Database {
     pub async fn connect(url: &str, token: &str) -> anyhow::Result<Self> {
         let db = if url.starts_with("file://") || url.starts_with("file:") || !url.contains("://") {
-            let path = url.strip_prefix("file://")
+            let path = url
+                .strip_prefix("file://")
                 .or_else(|| url.strip_prefix("file:"))
                 .unwrap_or(url);
             libsql::Builder::new_local(path).build().await?
@@ -36,10 +37,7 @@ impl Database {
     pub async fn load_noise_key(&self) -> Option<Vec<u8>> {
         let conn = self.db.connect().ok()?;
         let mut rows = conn
-            .query(
-                "SELECT value FROM server_config WHERE key = 'noise_sk'",
-                (),
-            )
+            .query("SELECT value FROM server_config WHERE key = 'noise_sk'", ())
             .await
             .ok()?;
         match rows.next().await.ok()? {

@@ -195,7 +195,8 @@ pub fn handle_event(app: &mut App) -> Result<()> {
                             app.log(format!("[ok] Banned {}", device.user_name));
                         }
                         app.refresh();
-                        app.device_detail = Some(app.devices[app.selected_device.unwrap_or(0)].clone());
+                        app.device_detail =
+                            Some(app.devices[app.selected_device.unwrap_or(0)].clone());
                     }
                 }
                 _ => {}
