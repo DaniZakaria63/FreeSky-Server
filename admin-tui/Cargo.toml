@@ -3,31 +3,27 @@ name = "freesky-admin-tui"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "admin-tui"
+path = "src/main.rs"
+
 [dependencies]
 # TUI
 ratatui = "0.29"
 crossterm = "0.28"
 
-# Database
-rusqlite = { version = "0.32", features = ["bundled"] }
-
 # HTTP client (blocking — this is a CLI tool, not async)
 reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
+
+# Admin API wire types (shared with the server)
+freesky-shared = { path = "../shared" }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Encoding
-hex = "0.4"
-base64 = "0.22"
-
 # Error handling
 anyhow = "1"
-thiserror = "2"
 
 # Time
 chrono = "0.4"
-
-# Logging
-tracing = "0.1"

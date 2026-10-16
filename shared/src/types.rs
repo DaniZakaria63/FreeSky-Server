@@ -119,3 +119,65 @@ pub enum AppError {
     #[error("internal error: {0}")]
     Internal(String),
 }
+
+// ─── Admin API ───
+//
+// Wire types for the admin API (server <-> admin TUI). The TUI runs on the
+// admin's machine and reaches these endpoints through the Cloudflare Tunnel;
+// every request carries `X-App-Key` plus (when Zero Trust Access is enabled)
+// `CF-Access-Client-Id` / `CF-Access-Client-Secret` service-token headers.
+
+/// Aggregate counters shown on the admin dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminStats {
+    pub total_users: i64,
+    pub active_users: i64,
+    pub banned_users: i64,
+    pub total_posts: i64,
+    pub today_posts: i64,
+    pub total_reports: i64,
+    pub unresolved_reports: i64,
+}
+
+/// An unresolved report row as shown in the admin TUI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminReportRow {
+    pub id: i64,
+    pub reason: Option<String>,
+    pub reported_at: i64,
+    pub user_name: String,
+}
+
+/// Community metadata for the admin TUI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminCommunity {
+    pub member_count: i64,
+    pub created_at: i64,
+    pub has_group_key: bool,
+}
+
+/// A device row returned by admin user search.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminDevice {
+    /// 65-byte SEC1 uncompressed public key, hex-encoded (130 chars).
+    pub pk_hex: String,
+    pub user_name: String,
+    pub user_color: u8,
+    pub registered_at: i64,
+    pub banned_at: Option<i64>,
+    pub last_seen_at: Option<i64>,
+    pub post_count: i64,
+}
+
+/// Result of a ban/unban request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminBanResult {
+    pub pk_hex: String,
+    pub banned: bool,
+}
+
+/// Result of a key rotation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminKeyRotate {
+    pub devices_updated: usize,
+}

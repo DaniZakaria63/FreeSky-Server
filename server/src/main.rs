@@ -53,6 +53,16 @@ async fn main() -> anyhow::Result<()> {
 
     let admin_app = axum::Router::new()
         .route("/admin/health", axum::routing::get(admin::health))
+        .route("/admin/stats", axum::routing::get(admin::stats))
+        .route("/admin/reports", axum::routing::get(admin::reports))
+        .route(
+            "/admin/reports/{id}/resolve",
+            axum::routing::post(admin::resolve_report),
+        )
+        .route("/admin/community", axum::routing::get(admin::community))
+        .route("/admin/devices", axum::routing::get(admin::devices))
+        .route("/admin/ban/{pk}", axum::routing::post(admin::ban))
+        .route("/admin/unban/{pk}", axum::routing::post(admin::unban))
         .route("/admin/kick/{pk}", axum::routing::post(admin::kick_member))
         .route("/admin/key-rotate", axum::routing::post(admin::key_rotate))
         .with_state(state.clone());
@@ -62,7 +72,7 @@ async fn main() -> anyhow::Result<()> {
     let noise_listener = tokio::net::TcpListener::bind("0.0.0.0:9443").await?;
 
     tracing::info!("HTTP API listening on 0.0.0.0:3000");
-    tracing::info!("Admin API listening on 127.0.0.1:3001");
+    tracing::info!("Admin API listening on 127.0.0.1:3001 (reachable via cloudflared)");
     tracing::info!("Noise API listening on 0.0.0.0:9443");
 
     let noise_handler = state.noise.clone();

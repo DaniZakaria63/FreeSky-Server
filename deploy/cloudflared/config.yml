@@ -1,0 +1,18 @@
+# Cloudflare Tunnel config for exposing the Freesky admin API.
+# Install to /etc/cloudflared/config.yml on the VPS.
+# Full guide: docs/cloudflare-tunnel-admin.md
+#
+#   cloudflared tunnel create freesky-admin
+#   cloudflared tunnel route dns freesky-admin admin.example.com
+
+tunnel: <TUNNEL_ID>
+credentials-file: /etc/cloudflared/<TUNNEL_ID>.json
+
+ingress:
+  # Admin API (server listens on 127.0.0.1:3001).
+  # Protect this hostname with a Zero Trust Access policy + service token.
+  - hostname: admin.example.com
+    service: http://127.0.0.1:3001
+
+  # Required catch-all: anything else is rejected.
+  - service: http_status:404

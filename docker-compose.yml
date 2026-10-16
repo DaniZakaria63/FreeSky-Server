@@ -6,6 +6,8 @@ services:
     ports:
       - "3000:3000"
       - "9443:9443"
+      # Admin API: localhost-only, reached by cloudflared on the host.
+      - "127.0.0.1:3001:3001"
     volumes:
       - freesky-data:/data
     environment:
