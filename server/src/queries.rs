@@ -463,6 +463,168 @@ impl Database {
         rows.next().await.ok().flatten().is_some()
     }
 
+    // ─── Admin API queries ───
+
+    /// Aggregate dashboard counters for the admin API.
+    pub async fn admin_stats(&self) -> Result<freesky_shared::types::AdminStats> {
+        // UTC day start; epoch is midnight-aligned so modulo is exact.
+        let now = Utc::now().timestamp();
+        let today_start = now - now.rem_euclid(86_400);
+
+        let conn = self.db.connect()?;
+        let mut rows = conn
+            .query(
+                "SELECT
+                    (SELECT COUNT(*) FROM devices),
+                    (SELECT COUNT(*) FROM devices WHERE banned_at IS NULL),
+                    (SELECT COUNT(*) FROM devices WHERE banned_at IS NOT NULL),
+                    (SELECT COUNT(*) FROM posts),
+                    (SELECT COUNT(*) FROM posts WHERE timestamp >= ?),
+                    (SELECT COUNT(*) FROM reports),
+                    (SELECT COUNT(*) FROM reports WHERE resolved_at IS NULL)",
+                [today_start],
+            )
+            .await?;
+        let row = rows
+            .next()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("admin_stats: aggregate query returned no row"))?;
+        Ok(freesky_shared::types::AdminStats {
+            total_users: row.get(0)?,
+            active_users: row.get(1)?,
+            banned_users: row.get(2)?,
+            total_posts: row.get(3)?,
+            today_posts: row.get(4)?,
+            total_reports: row.get(5)?,
+            unresolved_reports: row.get(6)?,
+        })
+    }
+
+    /// Unresolved reports (newest first, max 50) for the admin API.
+    pub async fn admin_unresolved_reports(
+        &self,
+    ) -> Result<Vec<freesky_shared::types::AdminReportRow>> {
+        let conn = self.db.connect()?;
+        let mut rows = conn
+            .query(
+                "SELECT r.id, r.reason, r.reported_at, d.user_name
+                 FROM reports r
+                 JOIN posts p ON p.id = r.post_id
+                 JOIN devices d ON d.pk_dev = p.author_pk
+                 WHERE r.resolved_at IS NULL
+                 ORDER BY r.reported_at DESC
+                 LIMIT 50",
+                (),
+            )
+            .await?;
+
+        let mut reports = Vec::new();
+        while let Some(row) = rows.next().await? {
+            reports.push(freesky_shared::types::AdminReportRow {
+                id: row.get(0)?,
+                reason: row.get(1)?,
+                reported_at: row.get(2)?,
+                user_name: row.get(3)?,
+            });
+        }
+        Ok(reports)
+    }
+
+    /// Community metadata for the admin API.
+    pub async fn admin_community(&self) -> Result<freesky_shared::types::AdminCommunity> {
+        let conn = self.db.connect()?;
+        let mut rows = conn
+            .query(
+                "SELECT member_count, created_at, mls_group_state IS NOT NULL
+                 FROM community WHERE id = 1",
+                (),
+            )
+            .await?;
+
+        match rows.next().await? {
+            Some(row) => Ok(freesky_shared::types::AdminCommunity {
+                member_count: row.get(0)?,
+                created_at: row.get(1)?,
+                has_group_key: row.get::<i64>(2)? != 0,
+            }),
+            None => Ok(freesky_shared::types::AdminCommunity {
+                member_count: 0,
+                created_at: 0,
+                has_group_key: false,
+            }),
+        }
+    }
+
+    /// Search devices by hex pk prefix/substring or user name (newest first).
+    pub async fn admin_search_devices(
+        &self,
+        query: &str,
+        limit: i64,
+    ) -> Result<Vec<freesky_shared::types::AdminDevice>> {
+        // Escape LIKE wildcards so user input matches literally.
+        let escaped = query
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let pattern = format!("%{escaped}%");
+        let limit = limit.clamp(1, 100);
+
+        let conn = self.db.connect()?;
+        let mut rows = conn
+            .query(
+                "SELECT d.pk_dev, d.user_name, d.user_color, d.registered_at,
+                        d.banned_at, d.last_seen_at,
+                        (SELECT COUNT(*) FROM posts WHERE author_pk = d.pk_dev) AS post_count
+                 FROM devices d
+                 WHERE hex(d.pk_dev) LIKE ?1 ESCAPE '\\'
+                    OR d.user_name LIKE ?1 ESCAPE '\\'
+                 ORDER BY d.registered_at DESC
+                 LIMIT ?2",
+                (pattern, limit),
+            )
+            .await?;
+
+        let mut devices = Vec::new();
+        while let Some(row) = rows.next().await? {
+            devices.push(freesky_shared::types::AdminDevice {
+                pk_hex: hex::encode(row.get::<Vec<u8>>(0)?),
+                user_name: row.get(1)?,
+                user_color: row.get::<i64>(2)? as u8,
+                registered_at: row.get(3)?,
+                banned_at: row.get(4)?,
+                last_seen_at: row.get(5)?,
+                post_count: row.get(6)?,
+            });
+        }
+        Ok(devices)
+    }
+
+    /// Ban or unban a device. Returns `false` when the device does not exist.
+    pub async fn admin_set_banned(&self, pk_dev: &[u8], banned: bool) -> Result<bool> {
+        let banned_at: Option<i64> = banned.then(|| Utc::now().timestamp());
+        let conn = self.db.connect()?;
+        let affected = conn
+            .execute(
+                "UPDATE devices SET banned_at = ? WHERE pk_dev = ?",
+                (banned_at, pk_dev.to_vec()),
+            )
+            .await?;
+        Ok(affected > 0)
+    }
+
+    /// Mark a report resolved. Returns `false` when not found or already resolved.
+    pub async fn admin_resolve_report(&self, report_id: i64, resolution: &str) -> Result<bool> {
+        let conn = self.db.connect()?;
+        let affected = conn
+            .execute(
+                "UPDATE reports SET resolved_at = ?, resolution = ?
+                 WHERE id = ? AND resolved_at IS NULL",
+                (Utc::now().timestamp(), resolution.to_string(), report_id),
+            )
+            .await?;
+        Ok(affected > 0)
+    }
+
     pub async fn create_comment_trigger(
         &self,
     ) -> std::result::Result<CreateCommentTriggerResult, PostError> {

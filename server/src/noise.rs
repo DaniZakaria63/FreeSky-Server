@@ -407,7 +407,11 @@ async fn route_noise_request(
             // Validate APK signing key
             let apk_sha1 = req.apk_cert_sha1.trim().to_uppercase().replace(':', "");
             if apk_sha1 != state.trusted_app_key {
-                tracing::warn!("noise register rejected: untrusted APK signing key");
+                tracing::warn!(
+                    "noise register rejected: untrusted APK signing key (expected: {}, received: {})",
+                    &state.trusted_app_key,
+                    apk_sha1
+                );
                 return serde_json::json!({ "message": "untrusted APK signing key", "data": null });
             }
 

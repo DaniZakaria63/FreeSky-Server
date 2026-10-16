@@ -272,7 +272,7 @@ fn render_user_detail(app: &App, frame: &mut Frame, area: Rect) {
                 Span::styled("Name: ", Style::new().dim()),
                 Span::styled(&d.user_name, Style::new().fg(COLORS[color_idx])),
             ]),
-            Line::from(Span::raw(format!("pk_dev: {}", hex::encode(&d.pk_dev)))),
+            Line::from(Span::raw(format!("pk_dev: {}", d.pk_hex))),
             Line::from(Span::raw(format!(
                 "Registered: {}",
                 format_ts(d.registered_at)

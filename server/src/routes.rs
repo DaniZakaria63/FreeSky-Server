@@ -14,7 +14,11 @@ pub async fn register(
     // Validate: APK signing key must match the trusted app key
     let apk_sha1 = req.apk_cert_sha1.trim().to_uppercase().replace(':', "");
     if apk_sha1 != state.trusted_app_key {
-        tracing::warn!("register rejected: untrusted APK signing key");
+        tracing::warn!(
+            "register rejected: untrusted APK signing key (expected: {}, received: {})",
+            &state.trusted_app_key,
+            apk_sha1
+        );
         return Json(freesky_shared::types::ApiResponse::error(
             "untrusted APK signing key",
         ));
