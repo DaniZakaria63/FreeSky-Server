@@ -17,7 +17,7 @@ RUN groupadd -r freesky && useradd -r -g freesky -d /data -s /sbin/nologin frees
 COPY --from=builder /app/target/release/freesky-server /usr/local/bin/freesky-server
 RUN mkdir -p /data && chown freesky:freesky /data
 VOLUME /data
-EXPOSE 3000 9443
+EXPOSE 3000 9443 3001
 USER freesky
 WORKDIR /data
 CMD ["freesky-server"]

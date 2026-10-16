@@ -29,13 +29,22 @@ async fn test_db() -> Database {
             parent_id       INTEGER REFERENCES posts(id)
         )",
         "CREATE INDEX IF NOT EXISTS idx_posts_timestamp ON posts(timestamp DESC)",
+        "CREATE TABLE IF NOT EXISTS reports (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            post_id     INTEGER NOT NULL REFERENCES posts(id),
+            reporter_pk BLOB NOT NULL REFERENCES devices(pk_dev),
+            reason      TEXT,
+            reported_at INTEGER NOT NULL,
+            resolved_at INTEGER,
+            resolution  TEXT
+        )",
         "CREATE TABLE IF NOT EXISTS server_config (
             key   TEXT PRIMARY KEY,
             value BLOB NOT NULL
         )",
     ];
     for sql in &schema {
-        conn.execute(*sql, ()).await.unwrap();
+        conn.execute(sql, ()).await.unwrap();
     }
     conn.execute(
         "INSERT INTO community (id, mls_group_state, created_at, member_count) VALUES (1, ?, 0, 1)",
@@ -274,4 +283,142 @@ async fn fetch_thread_not_found_returns_error() {
         Err(PostError::NotFound) => {}
         other => panic!("expected NotFound, got {other:?}"),
     }
+}
+
+// ─── Admin API queries ───
+
+async fn insert_report_raw(db: &Database, post_id: i64, reporter_pk: &[u8], reason: &str) -> i64 {
+    let conn = db.db.connect().unwrap();
+    let mut rows = conn
+        .query(
+            "INSERT INTO reports (post_id, reporter_pk, reason, reported_at) \
+             VALUES (?, ?, ?, ?) RETURNING id",
+            (
+                post_id,
+                reporter_pk.to_vec(),
+                reason.to_string(),
+                Utc::now().timestamp(),
+            ),
+        )
+        .await
+        .unwrap();
+    rows.next().await.unwrap().unwrap().get(0).unwrap()
+}
+
+#[tokio::test]
+async fn admin_stats_counts_everything() {
+    let db = test_db().await;
+    let (pk1, _) = gen_keypair();
+    let (pk2, _) = gen_keypair();
+    let (pk3, _) = gen_keypair();
+    db.register_device(&pk1).await.unwrap();
+    db.register_device(&pk2).await.unwrap();
+    db.register_device(&pk3).await.unwrap();
+
+    let old_post = insert_post_raw(&db, &pk1, 1000, b"old").await;
+    insert_post_raw(&db, &pk1, Utc::now().timestamp(), b"today").await;
+    insert_report_raw(&db, old_post, &pk3, "spam").await;
+
+    db.admin_set_banned(&pk2, true).await.unwrap();
+
+    let stats = db.admin_stats().await.unwrap();
+    assert_eq!(stats.total_users, 3);
+    assert_eq!(stats.active_users, 2);
+    assert_eq!(stats.banned_users, 1);
+    assert_eq!(stats.total_posts, 2);
+    assert_eq!(stats.today_posts, 1);
+    assert_eq!(stats.total_reports, 1);
+    assert_eq!(stats.unresolved_reports, 1);
+}
+
+#[tokio::test]
+async fn admin_search_devices_matches_name_pk_and_escapes_wildcards() {
+    let db = test_db().await;
+    let (pk1, _) = gen_keypair();
+    let (pk2, _) = gen_keypair();
+    let r1 = db.register_device(&pk1).await.unwrap();
+    db.register_device(&pk2).await.unwrap();
+
+    insert_post_raw(&db, &pk1, 1000, b"a").await;
+    insert_post_raw(&db, &pk1, 1001, b"b").await;
+
+    // By derived name substring.
+    let pk1_hex = hex::encode(&pk1);
+    let by_name = db.admin_search_devices(&r1.name, 20).await.unwrap();
+    let found = by_name
+        .iter()
+        .find(|d| d.pk_hex == pk1_hex)
+        .expect("device found by name");
+    assert_eq!(found.post_count, 2);
+    assert_eq!(found.user_color, r1.color);
+
+    // By hex pk prefix.
+    let by_pk = db.admin_search_devices(&pk1_hex[..8], 20).await.unwrap();
+    assert_eq!(by_pk.len(), 1);
+    assert_eq!(by_pk[0].pk_hex, pk1_hex);
+
+    // LIKE wildcards in user input are matched literally, not as patterns.
+    let wildcard = db.admin_search_devices("%%", 20).await.unwrap();
+    assert!(wildcard.is_empty());
+}
+
+#[tokio::test]
+async fn admin_ban_unban_roundtrip() {
+    let db = test_db().await;
+    let (pk, _) = gen_keypair();
+    db.register_device(&pk).await.unwrap();
+    let pk_hex = hex::encode(&pk);
+
+    assert!(db.admin_set_banned(&pk, true).await.unwrap());
+    let device = &db.admin_search_devices(&pk_hex, 20).await.unwrap()[0];
+    assert!(device.banned_at.is_some());
+
+    assert!(db.admin_set_banned(&pk, false).await.unwrap());
+    let device = &db.admin_search_devices(&pk_hex, 20).await.unwrap()[0];
+    assert!(device.banned_at.is_none());
+
+    // Unknown device → not found.
+    let (ghost, _) = gen_keypair();
+    assert!(!db.admin_set_banned(&ghost, true).await.unwrap());
+}
+
+#[tokio::test]
+async fn admin_reports_list_and_resolve() {
+    let db = test_db().await;
+    let (author, _) = gen_keypair();
+    let (reporter, _) = gen_keypair();
+    let author_name = db.register_device(&author).await.unwrap().name;
+    db.register_device(&reporter).await.unwrap();
+
+    let post_id = insert_post_raw(&db, &author, 1000, b"bad post").await;
+    let report_id = insert_report_raw(&db, post_id, &reporter, "spam").await;
+
+    let reports = db.admin_unresolved_reports().await.unwrap();
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].id, report_id);
+    assert_eq!(reports[0].reason.as_deref(), Some("spam"));
+    assert_eq!(reports[0].user_name, author_name);
+
+    assert!(
+        db.admin_resolve_report(report_id, "resolved")
+            .await
+            .unwrap()
+    );
+    // Already resolved → false.
+    assert!(
+        !db.admin_resolve_report(report_id, "resolved")
+            .await
+            .unwrap()
+    );
+    assert!(db.admin_unresolved_reports().await.unwrap().is_empty());
+    // Unknown id → false.
+    assert!(!db.admin_resolve_report(9999, "resolved").await.unwrap());
+}
+
+#[tokio::test]
+async fn admin_community_reports_group_key_state() {
+    let db = test_db().await;
+    let community = db.admin_community().await.unwrap();
+    assert!(community.has_group_key);
+    assert_eq!(community.member_count, 1);
 }

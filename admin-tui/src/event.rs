@@ -33,25 +33,25 @@ pub fn handle_event(app: &mut App) -> Result<()> {
                     if let Some(idx) = app.selected_device {
                         if idx < app.devices.len() {
                             let device = &app.devices[idx];
-                            if device.banned_at.is_some() {
-                                if let Err(e) = app.db.unban_user(&device.pk_dev) {
-                                    app.log(format!("[err] Unban failed: {e}"));
-                                } else {
-                                    app.log(format!(
-                                        "[ok] Unbanned {} ({})",
-                                        device.user_name,
-                                        hex::encode(&device.pk_dev[..6])
-                                    ));
-                                }
+                            let pk_hex = device.pk_hex.clone();
+                            let name = device.user_name.clone();
+                            let was_banned = device.banned_at.is_some();
+                            let short = short_pk(&pk_hex);
+
+                            let result = if was_banned {
+                                app.api.unban(&pk_hex)
                             } else {
-                                if let Err(e) = app.db.ban_user(&device.pk_dev) {
-                                    app.log(format!("[err] Ban failed: {e}"));
-                                } else {
-                                    app.log(format!(
-                                        "[ok] Banned {} ({})",
-                                        device.user_name,
-                                        hex::encode(&device.pk_dev[..6])
-                                    ));
+                                app.api.ban(&pk_hex)
+                            };
+                            match result {
+                                Ok(_) if was_banned => {
+                                    app.log(format!("[ok] Unbanned {name} ({short})"));
+                                }
+                                Ok(_) => {
+                                    app.log(format!("[ok] Banned {name} ({short})"));
+                                }
+                                Err(e) => {
+                                    app.log(format!("[err] Ban/unban failed: {e}"));
                                 }
                             }
                             app.refresh();
@@ -63,8 +63,11 @@ pub fn handle_event(app: &mut App) -> Result<()> {
                 KeyCode::Char('3') => {
                     if app.server_connected {
                         match app.api.key_rotate() {
-                            Ok(resp) => {
-                                app.log(format!("[ok] Key rotate: {resp}"));
+                            Ok(result) => {
+                                app.log(format!(
+                                    "[ok] Key rotated: {} devices updated",
+                                    result.devices_updated
+                                ));
                                 app.refresh();
                             }
                             Err(e) => app.log(format!("[err] Key rotate failed: {e}")),
@@ -77,12 +80,13 @@ pub fn handle_event(app: &mut App) -> Result<()> {
                     if let Some(idx) = app.selected_device {
                         if idx < app.devices.len() {
                             let user_name = app.devices[idx].user_name.clone();
-                            let pk = app.devices[idx].pk_dev.clone();
-                            let pk_hex = hex::encode(&pk);
+                            let pk_hex = app.devices[idx].pk_hex.clone();
                             match app.api.kick_member(&pk_hex) {
                                 Ok(resp) => {
-                                    app.log(format!("[ok] Kicked {}: {resp}", user_name));
-                                    app.db.ban_user(&pk).ok();
+                                    app.log(format!("[ok] Kicked {user_name}: {resp}"));
+                                    if let Err(e) = app.api.ban(&pk_hex) {
+                                        app.log(format!("[err] Ban after kick failed: {e}"));
+                                    }
                                     app.refresh();
                                 }
                                 Err(e) => app.log(format!("[err] Kick failed: {e}")),
@@ -95,14 +99,17 @@ pub fn handle_event(app: &mut App) -> Result<()> {
                 KeyCode::Char('5') => {
                     if let Some(idx) = app.selected_report {
                         if idx < app.reports.len() {
-                            let report = &app.reports[idx];
-                            if let Err(e) = app.db.resolve_report(report.id, "resolved") {
-                                app.log(format!("[err] Resolve report failed: {e}"));
-                            } else {
-                                app.log(format!(
-                                    "[ok] Resolved report #{} ({})",
-                                    report.id, report.user_name
-                                ));
+                            let report_id = app.reports[idx].id;
+                            let user_name = app.reports[idx].user_name.clone();
+                            match app.api.resolve_report(report_id) {
+                                Ok(()) => {
+                                    app.log(format!(
+                                        "[ok] Resolved report #{report_id} ({user_name})"
+                                    ));
+                                }
+                                Err(e) => {
+                                    app.log(format!("[err] Resolve report failed: {e}"));
+                                }
                             }
                             app.refresh();
                         }
@@ -141,17 +148,23 @@ pub fn handle_event(app: &mut App) -> Result<()> {
                 }
                 KeyCode::Enter => {
                     if app.devices.is_empty() {
-                        let results = app.db.search_devices(&app.search_query).unwrap_or_default();
-                        app.devices = results;
+                        match app.api.search_devices(&app.search_query) {
+                            Ok(results) => {
+                                app.devices = results;
+                                if app.devices.is_empty() {
+                                    app.log("! No users found".to_string());
+                                }
+                            }
+                            Err(e) => {
+                                app.log(format!("[err] Search failed: {e}"));
+                            }
+                        }
                         app.selected_device = None;
-                        if app.devices.is_empty() {
-                            app.log("! No users found".to_string());
-                        }
-                    } else if let Some(idx) = app.selected_device {
-                        if idx < app.devices.len() {
-                            app.device_detail = Some(app.devices[idx].clone());
-                            app.mode = Mode::UserDetail;
-                        }
+                    } else if let Some(idx) = app.selected_device
+                        && idx < app.devices.len()
+                    {
+                        app.device_detail = Some(app.devices[idx].clone());
+                        app.mode = Mode::UserDetail;
                     }
                 }
                 KeyCode::Backspace => {
@@ -186,16 +199,29 @@ pub fn handle_event(app: &mut App) -> Result<()> {
                     app.device_detail = None;
                 }
                 KeyCode::Char('b') => {
-                    if let Some(ref device) = app.device_detail.clone() {
-                        if device.banned_at.is_some() {
-                            app.db.unban_user(&device.pk_dev).ok();
-                            app.log(format!("[ok] Unbanned {}", device.user_name));
+                    if let Some(device) = app.device_detail.clone() {
+                        let result = if device.banned_at.is_some() {
+                            app.api.unban(&device.pk_hex)
                         } else {
-                            app.db.ban_user(&device.pk_dev).ok();
-                            app.log(format!("[ok] Banned {}", device.user_name));
+                            app.api.ban(&device.pk_hex)
+                        };
+                        match result {
+                            Ok(_) if device.banned_at.is_some() => {
+                                app.log(format!("[ok] Unbanned {}", device.user_name));
+                            }
+                            Ok(_) => {
+                                app.log(format!("[ok] Banned {}", device.user_name));
+                            }
+                            Err(e) => {
+                                app.log(format!("[err] Ban/unban failed: {e}"));
+                            }
                         }
                         app.refresh();
-                        app.device_detail = Some(app.devices[app.selected_device.unwrap_or(0)].clone());
+                        if let Some(idx) = app.selected_device
+                            && let Some(updated) = app.devices.get(idx)
+                        {
+                            app.device_detail = Some(updated.clone());
+                        }
                     }
                 }
                 _ => {}
@@ -203,4 +229,9 @@ pub fn handle_event(app: &mut App) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// First 12 hex chars of a `pk_dev` (6 bytes) for compact log lines.
+fn short_pk(pk_hex: &str) -> &str {
+    &pk_hex[..pk_hex.len().min(12)]
 }

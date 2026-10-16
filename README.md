@@ -104,21 +104,21 @@ A Rust workspace, three crates:
 ```
 freesky-server/
 ├── server/         # the actual server binary
-├── admin-tui/      # a terminal dashboard for admins (ratatui over SSH)
+├── admin-tui/      # terminal dashboard for admins (runs on the admin's machine)
 └── shared/         # crypto helpers + wire types shared between crates
 ```
 
 ### The server (`server/`)
 
-Built on **axum** (async HTTP framework) + **tokio** (the async runtime) + **rusqlite** (SQLite, bundled) + **snow** (Noise NK) + **p256** / **aes-gcm** / **hkdf** (the crypto primitives). It listens on three ports:
+Built on **axum** (async HTTP framework) + **tokio** (the async runtime) + **libsql** (SQLite-compatible store; local file or remote Turso) + **snow** (Noise NK) + **p256** / **aes-gcm** / **hkdf** (the crypto primitives). It listens on three ports:
 
-- **3000** — public HTTP, only for `/register` (registration must be reachable before Noise keys are exchanged).
-- **9443** — raw TCP, Noise NK handshake then length-prefixed encrypted JSON. This is where `post`, `feed`, and `report` live. Nothing readable hits this port in plaintext.
-- **3001** — admin API, localhost only. Key rotation, member kicks.
+- **3000** — public HTTP: `/register` and `/server-pk` (registration must be reachable before Noise keys are exchanged). Typically served through the Cloudflare Tunnel as `api-freesky.<domain>`.
+- **9443** — raw TCP, Noise NK handshake then length-prefixed encrypted JSON. This is where `post`, `feed`, and `report` live. Nothing readable hits this port in plaintext. This one stays direct — Cloudflare's proxy speaks HTTP and cannot carry raw Noise TCP.
+- **3001** — admin API, bound to `127.0.0.1` only. Reached through the Cloudflare Tunnel (or an SSH tunnel) by the admin TUI.
 
 ### The admin TUI (`admin-tui/`)
 
-A **ratatui** dashboard that runs as an SSH login shell. The admin connects via SSH and lands directly in the dashboard — no shell prompt, no command injection surface. It reads SQLite directly for stats and calls the localhost admin API for stateful ops (key rotation needs the in-memory group state).
+A **ratatui** dashboard that runs on the *admin's* machine and is a pure admin-API client — it holds no database, needs no server state, and works from anywhere. It reaches the admin API through the Cloudflare Tunnel (`admin-freesky.<domain>`) or an SSH tunnel, authenticating with the app key plus an optional **Zero Trust service token**. One binary: `cargo install --path admin-tui` and it's on your PATH.
 
 ### Shared (`shared/`)
 
@@ -150,7 +150,117 @@ The server reads `TRUSTED_APK_KEY` from the environment — the SHA-1 (hex, colo
 TRUSTED_APK_KEY=AB:CD:EF:12:... ./target/release/freesky-server
 ```
 
-Deploy is two binaries + one SQLite file (`community.db`) in the working directory. systemd unit for the server, SSH login shell for the admin TUI. No database server, no container orchestration, no message broker. It's deliberately boring to operate.
+Deploy is one binary + one SQLite file (`community.db`, or a remote Turso URL) on the server, plus the TUI binary wherever the admin sits. No database server, no container orchestration, no message broker. It's deliberately boring to operate — the full walkthrough (systemd, Cloudflare Tunnel, Zero Trust service token, admin login) is in [Deploy & admin access](#deploy--admin-access) below.
+
+---
+
+## Deploy & admin access
+
+The whole production topology: one VPS binary, two Cloudflare Tunnel hostnames, one terminal dashboard on the admin's laptop.
+
+```
+        Android app ── HTTPS ──▶ api-freesky.<domain>    ─┐
+        Android app ── Noise ──▶ VPS_IP:9443  (direct)    │ Cloudflare edge
+        admin-tui   ── HTTPS ──▶ admin-freesky.<domain>  ─┘ (+ Zero Trust Access)
+                                        │
+                                 cloudflared on the VPS
+                                        │
+                      127.0.0.1:3000  ·  127.0.0.1:3001
+```
+
+### 1. The server (VPS)
+
+```bash
+# one-time: user, directories, systemd unit, /etc/freesky.env template
+sudo bash scripts/vps-bootstrap.sh
+
+# then edit the env
+sudo nano /etc/freesky.env
+#   TURSO_URL=file:///var/lib/freesky/community.db     (or libsql://… + TURSO_AUTH_TOKEN for Turso)
+#   TRUSTED_APK_KEY=AB:CD:EF:12:…                      (SHA-1 of your APK signing cert, colons optional)
+
+# ship and start
+cargo build --release
+scp target/release/freesky-server <vps>:/tmp/
+ssh <vps> 'sudo install -m755 /tmp/freesky-server /usr/local/bin/freesky-server && sudo systemctl enable --now freesky-server'
+```
+
+Without `TRUSTED_APK_KEY` the admin API refuses to serve at all (HTTP 503) — there is no "auth disabled" mode.
+
+### 2. Cloudflare Tunnel (on the VPS)
+
+`cloudflared` carries the two HTTP hostnames; the Noise port stays direct.
+
+```bash
+cloudflared tunnel login                                    # once, in a browser
+cloudflared tunnel create freesky
+cloudflared tunnel route dns freesky api-freesky.<domain>   # app HTTP API
+cloudflared tunnel route dns freesky admin-freesky.<domain> # admin API
+```
+
+Drop this in `/etc/cloudflared/freesky.yml` (also in [`deploy/cloudflared/config.yml`](deploy/cloudflared/config.yml)) and run it under systemd:
+
+```yaml
+tunnel: <TUNNEL_ID>
+credentials-file: /root/.cloudflared/<TUNNEL_ID>.json
+ingress:
+  - hostname: api-freesky.<domain>
+    service: http://127.0.0.1:3000
+  - hostname: admin-freesky.<domain>
+    service: http://127.0.0.1:3001
+  - service: http_status:404
+```
+
+**The Noise port does not go through the tunnel.** Cloudflare's proxy speaks HTTP; Noise is raw TCP on 9443. Keep 9443 reachable directly (or behind a firewall allowlist) — the app dials `<vps-ip>:9443`.
+
+### 3. Zero Trust Access for the admin API
+
+Don't let "knows the hostname" be enough. In **Zero Trust → Access**:
+
+1. **Service Auth → Service Tokens → Create** — name it, e.g. `freesky-admin-tui`. Copy the *Client ID* and *Client Secret* (shown once).
+2. **Applications → Add an application → Self-hosted** — public hostname `admin-freesky.<domain>`.
+3. Add a policy: name it, **Action: Service Auth**, rule: **Include → Service Token → `freesky-admin-tui`**.
+
+Use **Service Auth**, not Email/OTP — the TUI is a machine client and can never complete a browser login challenge. Once active: requests without the token get HTTP 302 from Access; with it, they pass through and face the `X-App-Key` check.
+
+### 4. The admin TUI — install & log in
+
+```bash
+cargo install --path admin-tui    # installs `admin-tui` into ~/.cargo/bin
+```
+
+"Logging in" means providing three things:
+
+| Credential | What it is |
+|---|---|
+| `APP_KEY` (or `--app-key`) | the SHA-1 that matches the server's `TRUSTED_APK_KEY` — this is the admin key |
+| `ADMIN_API_BASE` (or `--api-base`) | `https://admin-freesky.<domain>` (defaults to `http://127.0.0.1:3001` when run on the server itself) |
+| `CF_ACCESS_CLIENT_ID` + `CF_ACCESS_CLIENT_SECRET` | the Zero Trust service token from step 3 |
+
+```bash
+export APP_KEY="AB:CD:EF:12:…"
+export ADMIN_API_BASE="https://admin-freesky.example.com"
+export CF_ACCESS_CLIENT_ID="<client id>"
+export CF_ACCESS_CLIENT_SECRET="<client secret>"
+admin-tui
+```
+
+To avoid re-exporting every time, park those four values in a private env file (`chmod 600`) and wrap them in a tiny script on your PATH — e.g. `~/.local/bin/freesky-admin` that does `set -a; source ~/.config/freesky/admin-tui.env; set +a; exec admin-tui "$@"`. Then "logging in" is just typing `freesky-admin`.
+
+**First thing on a fresh server:** press **[3] Key rotate**. That creates the community group key. Until it exists, no device can register (they get a 503). Then you're looking at live users, posts, and reports.
+
+| Key | Action |
+|---|---|
+| `1` / `Tab` | Search users (by name or hex key) |
+| `2` | Ban / unban the selected user |
+| `3` | Key rotate (re-ECIES the group key to every device) |
+| `4` | Kick member *(server-side stub for now)* |
+| `5` | Resolve the selected report |
+| `↑↓` / `j` `k` | Select report |
+| `B` | Ban / unban from the user detail view |
+| `R` / `Q` | Refresh / quit |
+
+Full tunnel guide with a troubleshooting table: [`docs/cloudflare-tunnel-admin.md`](docs/cloudflare-tunnel-admin.md).
 
 ---
 
@@ -168,7 +278,7 @@ Real, not aspirational. As of the last sync with the Android client:
 | Feed retrieval with cursor pagination | Done |
 | Admin key rotation (re-ECIES to all devices) | Done |
 | MLS group encryption (full RFC 9420) | Dependency wired, integration pending |
-| Admin TUI | Stub |
+| Admin TUI | Done — remote over Cloudflare Tunnel with service-token auth (member kick still stubbed server-side) |
 | Post reporting | Stub |
 | Member kick (MLS Remove) | Stub |
 
