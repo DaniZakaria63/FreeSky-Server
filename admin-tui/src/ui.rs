@@ -27,7 +27,10 @@ const COLORS: [Color; 16] = [
 ];
 
 fn format_ts(ts: i64) -> String {
-    let dt = DateTime::from_timestamp(ts, 0).unwrap();
+    // Out-of-range timestamps (e.g. a hostile server) must not panic the TUI.
+    let Some(dt) = DateTime::from_timestamp(ts, 0) else {
+        return ts.to_string();
+    };
     let now = Utc::now();
     let dur = now - dt;
     if dur.num_minutes() < 60 {

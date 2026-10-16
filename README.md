@@ -300,4 +300,10 @@ So this code is here. Use it, fork it, audit it, run it. The math doesn't care w
 
 ---
 
-*Protocol spec lives in `AGENTS.md` and the canonical sync doc at `~/opt/docs/freesky/PROTOCOL_SYNC.md` if you want to verify the wire formats yourself. Read the crypto code in `shared/src/crypto.rs` — it's short, and it's the part that matters.*
+*Protocol spec lives in `AGENTS.md`. Read the crypto code in `shared/src/crypto.rs` — it's short, and it's the part that matters.*
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE). Use it, fork it, run it.

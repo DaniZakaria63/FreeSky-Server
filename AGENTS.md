@@ -135,7 +135,7 @@ Server data: single SQLite file (`community.db`, `TURSO_URL=file://...`) or remo
 
 ## Source of truth
 
-**Canonical protocol sync** at `/home/dani/opt/docs/freesky/` — single source of truth for all Android↔Server wire formats, curve choices, API shapes. Read `PROTOCOL_SYNC.md` first. Overrides docs/ if conflict.
+**Canonical protocol sync** (`PROTOCOL_SYNC.md`, kept separately from this repo) — single source of truth for all Android↔Server wire formats, curve choices, API shapes. Overrides `docs/` if conflict.
 
 Key points from sync doc:
 - **Android uses secp256r1** (NIST P-256), NOT X25519. AndroidKeyStore constraint.
