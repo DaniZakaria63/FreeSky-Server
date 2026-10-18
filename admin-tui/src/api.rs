@@ -1,9 +1,8 @@
 //! Admin API client.
 //!
-//! The TUI runs on the admin's machine and reaches the server's admin API
-//! through the Cloudflare Tunnel (Zero Trust). Every request carries
-//! `X-App-Key`; when the tunnel is protected by Access, the Cloudflare
-//! service-token headers are attached as well.
+//! The TUI runs on the server itself and talks to the admin API over loopback;
+//! every request carries the `X-App-Key` header. The API is never published,
+//! so there is no proxy, token or tunnel in this path.
 
 use anyhow::{Context, Result, bail};
 use freesky_shared::types::{
@@ -14,21 +13,12 @@ use reqwest::Method;
 use serde::de::DeserializeOwned;
 use std::time::Duration;
 
-/// Cloudflare Zero Trust Access service token.
-pub(crate) struct CfAccessToken {
-    pub client_id: String,
-    pub client_secret: String,
-}
-
 /// Connection settings for the admin API.
 pub(crate) struct AdminConfig {
-    /// Base URL, e.g. `https://admin.example.com` (tunnel) or
-    /// `http://127.0.0.1:3001` (local).
+    /// Base URL, e.g. `http://127.0.0.1:3001`.
     pub base_url: String,
     /// Trusted APK signing key SHA-1, sent as `X-App-Key`.
     pub app_key: String,
-    /// Service token, required when Access protects the tunnel hostname.
-    pub cf_access: Option<CfAccessToken>,
 }
 
 pub(crate) struct AdminApi {
@@ -40,9 +30,9 @@ impl AdminApi {
     pub fn new(config: AdminConfig) -> Result<Self> {
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(10))
-            // Do not follow redirects: Cloudflare Access answers an
-            // unauthenticated request with a 302 to its login page, and we
-            // want to surface that clearly instead of parsing HTML.
+            // Do not follow redirects: the admin API never redirects, so one
+            // means something unexpected is sitting in front of it. Surface
+            // that instead of parsing whatever HTML comes back.
             .redirect(reqwest::redirect::Policy::none())
             .user_agent(concat!("freesky-admin-tui/", env!("CARGO_PKG_VERSION")))
             .build()
@@ -61,15 +51,10 @@ impl AdminApi {
     fn call(&self, method: Method, path: &str) -> Result<Option<serde_json::Value>> {
         let url = format!("{}{}", self.config.base_url, path);
 
-        let mut request = self
+        let request = self
             .client
             .request(method, &url)
             .header("X-App-Key", &self.config.app_key);
-        if let Some(token) = &self.config.cf_access {
-            request = request
-                .header("CF-Access-Client-Id", &token.client_id)
-                .header("CF-Access-Client-Secret", &token.client_secret);
-        }
 
         let response = request
             .send()
@@ -80,18 +65,7 @@ impl AdminApi {
         let envelope: ApiResponse<serde_json::Value> = match serde_json::from_str(&body) {
             Ok(envelope) => envelope,
             Err(_) => {
-                let hint = match status.as_u16() {
-                    301 | 302 | 303 | 307 | 308 => {
-                        " — blocked by Cloudflare Access? \
-                         Set CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET"
-                    }
-                    403 => {
-                        " — forbidden; if Zero Trust Access is enabled, \
-                         check the service-token policy for this hostname"
-                    }
-                    _ => "",
-                };
-                bail!("HTTP {status} from {url}: not a Freesky admin API response{hint}");
+                bail!("HTTP {status} from {url}: not a Freesky admin API response");
             }
         };
 

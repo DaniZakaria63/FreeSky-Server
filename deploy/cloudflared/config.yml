@@ -1,18 +1,30 @@
-# Cloudflare Tunnel config for exposing the Freesky admin API.
-# Install to /etc/cloudflared/config.yml on the VPS.
-# Full guide: docs/cloudflare-tunnel-admin.md
+# Cloudflare Tunnel config for the Freesky **public API**.
+# Install to /etc/cloudflared/freesky.yml on the VPS.
+# Full guide: README.md (Deploy & admin access)
 #
-#   cloudflared tunnel create freesky-admin
-#   cloudflared tunnel route dns freesky-admin admin.example.com
+#   cloudflared tunnel create freesky
+#   cloudflared tunnel route dns freesky api-freesky.example.com
 
 tunnel: <TUNNEL_ID>
 credentials-file: /etc/cloudflared/<TUNNEL_ID>.json
 
 ingress:
-  # Admin API (server listens on 127.0.0.1:3001).
-  # Protect this hostname with a Zero Trust Access policy + service token.
-  - hostname: admin.example.com
-    service: http://127.0.0.1:3001
+  # Public app API (server listens on 127.0.0.1:3000).
+  - hostname: api-freesky.example.com
+    service: http://127.0.0.1:3000
+
+  # The admin API (127.0.0.1:3001) is deliberately NOT published here.
+  #
+  # It used to be, and the only credential was the X-App-Key header — the APK
+  # signing key, which is public (it ships inside the APK) — with no Zero Trust
+  # Access application in front of it. That put the admin API on the open
+  # internet guarded by a value anyone holding the APK could read. Admin access
+  # is SSH-only now: docs/admin-tui-ssh.md.
+  #
+  # To publish it again you would need the origin to verify who is calling, and
+  # it cannot: beyond X-App-Key — a public constant — it has nothing to check.
+  # So don't. The admin API is reached from the server itself, which is where
+  # the TUI runs (docs/admin-tui-ssh.md).
 
   # Required catch-all: anything else is rejected.
   - service: http_status:404

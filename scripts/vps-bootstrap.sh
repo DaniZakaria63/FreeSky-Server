@@ -15,6 +15,14 @@ cp freesky-server.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable freesky-server
 
+echo "==> Installing admin helpers..."
+# freesky-deploy: root helper used by GitHub Actions to install new binaries.
+# freesky-admin:  operator entry point — reads TRUSTED_APK_KEY from
+#                 /etc/freesky.env and opens the TUI (docs/admin-tui-ssh.md).
+install -m 755 -o root -g root scripts/freesky-deploy.sh /usr/local/sbin/freesky-deploy
+install -m 755 -o root -g root scripts/freesky-admin.sh /usr/local/bin/freesky-admin
+echo "    (admin-tui itself is shipped by .github/workflows/deploy.yml)"
+
 echo "==> Creating .env template..."
 if [ ! -f /etc/freesky.env ]; then
   cat > /etc/freesky.env << EOF

@@ -118,7 +118,7 @@ Built on **axum** (async HTTP framework) + **tokio** (the async runtime) + **lib
 
 ### The admin TUI (`admin-tui/`)
 
-A **ratatui** dashboard that runs on the *admin's* machine and is a pure admin-API client — it holds no database, needs no server state, and works from anywhere. It reaches the admin API through the Cloudflare Tunnel (`admin-freesky.<domain>`) or an SSH tunnel, authenticating with the app key plus an optional **Zero Trust service token**. One binary: `cargo install --path admin-tui` and it's on your PATH.
+A **ratatui** dashboard that runs on the server itself and is a pure admin-API client — it holds no database and needs no server state. It talks to the admin API over loopback, authenticating with the app key, and you reach it with one SSH command: `ssh -t <vps> freesky-admin`. One binary, installed by the deploy workflow at `/usr/local/bin/admin-tui`; the API it talks to is never published anywhere.
 
 ### Shared (`shared/`)
 
@@ -150,22 +150,22 @@ The server reads `TRUSTED_APK_KEY` from the environment — the SHA-1 (hex, colo
 TRUSTED_APK_KEY=AB:CD:EF:12:... ./target/release/freesky-server
 ```
 
-Deploy is one binary + one SQLite file (`community.db`, or a remote Turso URL) on the server, plus the TUI binary wherever the admin sits. No database server, no container orchestration, no message broker. It's deliberately boring to operate — the full walkthrough (systemd, Cloudflare Tunnel, Zero Trust service token, admin login) is in [Deploy & admin access](#deploy--admin-access) below.
+Deploy is two binaries + one SQLite file (`community.db`, or a remote Turso URL) on the server — the server and the dashboard. No database server, no container orchestration, no message broker. It's deliberately boring to operate — the full walkthrough (systemd, the Cloudflare Tunnel for the app API, and one-command admin login) is in [Deploy & admin access](#deploy--admin-access) below.
 
 ---
 
 ## Deploy & admin access
 
-The whole production topology: one VPS binary, two Cloudflare Tunnel hostnames, one terminal dashboard on the admin's laptop.
+The whole production topology: one VPS, one public hostname for the app API, and a dashboard you open over SSH. The admin API is never published.
 
 ```
-        Android app ── HTTPS ──▶ api-freesky.<domain>    ─┐
-        Android app ── Noise ──▶ VPS_IP:9443  (direct)    │ Cloudflare edge
-        admin-tui   ── HTTPS ──▶ admin-freesky.<domain>  ─┘ (+ Zero Trust Access)
-                                        │
-                                 cloudflared on the VPS
-                                        │
-                      127.0.0.1:3000  ·  127.0.0.1:3001
+        Android app ── HTTPS ──▶ api-freesky.<domain>  ─┐ Cloudflare edge
+        Android app ── Noise ──▶ VPS_IP:9443  (direct)  │
+                                   cloudflared on the VPS│
+                                         │              │
+                                   127.0.0.1:3000      ─┘
+
+        you ── ssh ──▶ VPS ──▶ admin-tui ──▶ 127.0.0.1:3001
 ```
 
 ### 1. The server (VPS)
@@ -189,13 +189,12 @@ Without `TRUSTED_APK_KEY` the admin API refuses to serve at all (HTTP 503) — t
 
 ### 2. Cloudflare Tunnel (on the VPS)
 
-`cloudflared` carries the two HTTP hostnames; the Noise port stays direct.
+`cloudflared` carries the app HTTP API; the Noise port stays direct, and the admin API is **not** published at all.
 
 ```bash
 cloudflared tunnel login                                    # once, in a browser
 cloudflared tunnel create freesky
-cloudflared tunnel route dns freesky api-freesky.<domain>   # app HTTP API
-cloudflared tunnel route dns freesky admin-freesky.<domain> # admin API
+cloudflared tunnel route dns freesky api-freesky.<domain>   # app HTTP API only
 ```
 
 Drop this in `/etc/cloudflared/freesky.yml` (also in [`deploy/cloudflared/config.yml`](deploy/cloudflared/config.yml)) and run it under systemd:
@@ -206,48 +205,24 @@ credentials-file: /root/.cloudflared/<TUNNEL_ID>.json
 ingress:
   - hostname: api-freesky.<domain>
     service: http://127.0.0.1:3000
-  - hostname: admin-freesky.<domain>
-    service: http://127.0.0.1:3001
   - service: http_status:404
 ```
 
+Never add `127.0.0.1:3001` to this file. The admin API's only credential is the `X-App-Key` header, which is the APK signing key — it ships inside the APK and anyone can read it, so publishing the admin hostname puts administration on the open internet. That is exactly how this deployment was exposed until the hostname was removed.
+
 **The Noise port does not go through the tunnel.** Cloudflare's proxy speaks HTTP; Noise is raw TCP on 9443. Keep 9443 reachable directly (or behind a firewall allowlist) — the app dials `<vps-ip>:9443`.
 
-### 3. Zero Trust Access for the admin API
+### 3. Admin access — SSH (the default)
 
-Don't let "knows the hostname" be enough. In **Zero Trust → Access**:
-
-1. **Service Auth → Service Tokens → Create** — name it, e.g. `freesky-admin-tui`. Copy the *Client ID* and *Client Secret* (shown once).
-2. **Applications → Add an application → Self-hosted** — public hostname `admin-freesky.<domain>`.
-3. Add a policy: name it, **Action: Service Auth**, rule: **Include → Service Token → `freesky-admin-tui`**.
-
-Use **Service Auth**, not Email/OTP — the TUI is a machine client and can never complete a browser login challenge. Once active: requests without the token get HTTP 302 from Access; with it, they pass through and face the `X-App-Key` check.
-
-### 4. The admin TUI — install & log in
+The admin API is bound to `127.0.0.1:3001` and is **not** published through the tunnel, so the only way in is SSH. The deploy workflow installs a wrapper on the VPS, which makes logging in one command:
 
 ```bash
-cargo install --path admin-tui    # installs `admin-tui` into ~/.cargo/bin
+ssh -t ubuntu@<vps> freesky-admin
 ```
 
-"Logging in" means providing three things:
+`freesky-admin` reads `TRUSTED_APK_KEY` out of `/etc/freesky.env` (it needs passwordless sudo) and starts the TUI against `127.0.0.1:3001`. Nothing to export, nothing to remember. Details, manual install and troubleshooting: [`docs/admin-tui-ssh.md`](docs/admin-tui-ssh.md).
 
-| Credential | What it is |
-|---|---|
-| `APP_KEY` (or `--app-key`) | the SHA-1 that matches the server's `TRUSTED_APK_KEY` — this is the admin key |
-| `ADMIN_API_BASE` (or `--api-base`) | `https://admin-freesky.<domain>` (defaults to `http://127.0.0.1:3001` when run on the server itself) |
-| `CF_ACCESS_CLIENT_ID` + `CF_ACCESS_CLIENT_SECRET` | the Zero Trust service token from step 3 |
-
-```bash
-export APP_KEY="AB:CD:EF:12:…"
-export ADMIN_API_BASE="https://admin-freesky.example.com"
-export CF_ACCESS_CLIENT_ID="<client id>"
-export CF_ACCESS_CLIENT_SECRET="<client secret>"
-admin-tui
-```
-
-To avoid re-exporting every time, park those four values in a private env file (`chmod 600`) and wrap them in a tiny script on your PATH — e.g. `~/.local/bin/freesky-admin` that does `set -a; source ~/.config/freesky/admin-tui.env; set +a; exec admin-tui "$@"`. Then "logging in" is just typing `freesky-admin`.
-
-**First thing on a fresh server:** press **[3] Key rotate**. That creates the community group key. Until it exists, no device can register (they get a 503). Then you're looking at live users, posts, and reports.
+**First thing on a fresh server:** press **[3] Key rotate**. That creates the community group key. Until it exists, every device registration is rejected with `no group key exists`. Then you're looking at live users, posts, and reports.
 
 | Key | Action |
 |---|---|
@@ -259,8 +234,6 @@ To avoid re-exporting every time, park those four values in a private env file (
 | `↑↓` / `j` `k` | Select report |
 | `B` | Ban / unban from the user detail view |
 | `R` / `Q` | Refresh / quit |
-
-Full tunnel guide with a troubleshooting table: [`docs/cloudflare-tunnel-admin.md`](docs/cloudflare-tunnel-admin.md).
 
 ---
 
@@ -278,7 +251,7 @@ Real, not aspirational. As of the last sync with the Android client:
 | Feed retrieval with cursor pagination | Done |
 | Admin key rotation (re-ECIES to all devices) | Done |
 | MLS group encryption (full RFC 9420) | Dependency wired, integration pending |
-| Admin TUI | Done — remote over Cloudflare Tunnel with service-token auth (member kick still stubbed server-side) |
+| Admin TUI | Done — runs on the server, one SSH command, no remote surface (member kick still stubbed server-side) |
 | Post reporting | Stub |
 | Member kick (MLS Remove) | Stub |
 
