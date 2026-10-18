@@ -2,7 +2,7 @@
 
 ## Project
 
-Rust workspace: encrypted community app server. Server stores MLS-encrypted posts, cannot read content. Users authenticated via Noise NK handshake + secp256r1 device keys. Admin via ratatui TUI over SSH.
+Rust workspace: encrypted community app server. Server stores MLS-encrypted posts, cannot read content. Users authenticated via Noise NK handshake + secp256r1 device keys. Admin via ratatui TUI that runs on the admin's machine and reaches the admin API through a Cloudflare Tunnel (Zero Trust).
 
 ## Priorities
 
@@ -14,15 +14,15 @@ Rust workspace: encrypted community app server. Server stores MLS-encrypted post
 ```
 freesky-server/
 ├── Cargo.toml              # workspace root
-├── server/                 # axum + noise listener + rusqlite + openmls
+├── server/                 # axum + noise listener + libsql + openmls
 │   ├── Cargo.toml
 │   └── src/
 │       ├── main.rs         # tokio main, dual listener (3000 HTTP, 9443 Noise)
 │       ├── noise.rs        # Noise NK handshake (snow crate)
 │       ├── routes.rs       # register, post, feed
-│       ├── admin.rs        # localhost admin API
-│       └── db.rs           # SQLite queries + schema
-├── admin-tui/              # ratatui dashboard (SSH login shell)
+│       ├── admin.rs        # admin API (127.0.0.1:3001, via cloudflared)
+│       └── db.rs           # libsql connection (local file or remote Turso)
+├── admin-tui/              # ratatui dashboard (runs on admin's machine)
 │   ├── Cargo.toml
 │   └── src/main.rs
 └── shared/                 # shared types, crypto helpers (optional)
@@ -33,13 +33,13 @@ freesky-server/
 ## Key commands
 
 ```bash
-cargo build --release          # build all (server + admin-tui)
-cargo build -p server          # just server binary
-cargo build -p admin-tui       # just admin-tui binary
-cargo test                     # all tests
-cargo test -p server           # server tests only
-scp target/release/server <host>:/usr/local/bin/freesky-server
-scp target/release/admin-tui <host>:/usr/local/bin/
+cargo build --release              # build all (server + admin-tui)
+cargo build -p freesky-server      # just server binary
+cargo build -p freesky-admin-tui   # just TUI binary (target/release/admin-tui)
+cargo test                         # all tests
+cargo test -p freesky-server       # server tests only
+cargo install --path admin-tui     # install admin-tui globally (admin's machine)
+scp target/release/freesky-server <host>:/usr/local/bin/freesky-server
 ```
 
 ## Architecture
@@ -64,9 +64,9 @@ scp target/release/admin-tui <host>:/usr/local/bin/
 - All API operations (post, feed, report) go through encrypted Noise transport
 - Length-prefixed encrypted JSON messages after handshake
 
-### Database (SQLite, rusqlite bundled)
+### Database (libsql — local SQLite file or remote Turso)
 
-Schema in `docs/community-app-crypto-plan.md` §11: `devices`, `community`, `posts`, `reports`. Key constraint: `pk_dev BLOB PRIMARY KEY` in devices.
+Schema created by `queries.rs::run_schema` (mirrors `docs/community-app-crypto-plan.md` §11): `devices`, `community`, `posts`, `reports`, `server_config`. Key constraint: `pk_dev BLOB PRIMARY KEY` in devices. `TURSO_URL` selects local (`file://...`) or remote (`libsql://...`) mode.
 
 ### MLS (openmls)
 
@@ -77,13 +77,19 @@ Schema in `docs/community-app-crypto-plan.md` §11: `devices`, `community`, `pos
 - Posts signed with ECDSA secp256r1 (`p256` ECDSA) — author_pk + author_sig on every post
 - MLS epoch tracked per post for forward secrecy verification
 
-### Admin TUI (ratatui + rusqlite + reqwest)
+### Admin TUI (ratatui + reqwest)
 
-- Runs as SSH login shell (`sudo usermod -s /usr/local/bin/admin-tui admin`)
-- Reads SQLite directly (read-only queries)
-- Writes bans/reports directly to SQLite
-- Calls localhost API for MLS ops (key rotate, kick — need in-memory group state)
-- No auth middleware needed (SSH + localhost source IP)
+- Runs on the **admin's machine**, not the server; all data comes from the admin API
+- Reaches the API through the Cloudflare Tunnel (Zero Trust); requests carry
+  `X-App-Key` plus `CF-Access-Client-Id` / `CF-Access-Client-Secret` service-token headers
+- Admin API stays bound to `127.0.0.1:3001` on the server — only cloudflared reaches it
+- Config: `APP_KEY`, `ADMIN_API_BASE`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`
+- Install globally: `cargo install --path admin-tui` (binary: `admin-tui`)
+- Admin API endpoints: `/admin/health`, `/admin/stats`, `/admin/reports`,
+  `/admin/reports/{id}/resolve`, `/admin/community`, `/admin/devices?q=`,
+  `/admin/ban/{pk}`, `/admin/unban/{pk}`, `/admin/kick/{pk}`, `/admin/key-rotate`
+- API refuses to serve when `TRUSTED_APK_KEY` is unset (503) — no "auth disabled" mode
+- Setup guide: `docs/cloudflare-tunnel-admin.md`
 
 ## Conventions
 
@@ -120,15 +126,16 @@ Schema in `docs/community-app-crypto-plan.md` §11: `devices`, `community`, `pos
 
 ```bash
 cargo build --release --target x86_64-unknown-linux-gnu
-# binaries: target/release/server, target/release/admin-tui
-# systemd service for server, admin shell for admin-tui
+# binaries: target/release/freesky-server, target/release/admin-tui
+# server: systemd service (deploy.sh / GitHub Actions push to master)
+# admin-tui: installed on the admin's machine — cargo install --path admin-tui
 ```
 
-Single SQLite file (`community.db`) at server working directory.
+Server data: single SQLite file (`community.db`, `TURSO_URL=file://...`) or remote Turso.
 
 ## Source of truth
 
-**Canonical protocol sync** at `/home/dani/opt/docs/freesky/` — single source of truth for all Android↔Server wire formats, curve choices, API shapes. Read `PROTOCOL_SYNC.md` first. Overrides docs/ if conflict.
+**Canonical protocol sync** (`PROTOCOL_SYNC.md`, kept separately from this repo) — single source of truth for all Android↔Server wire formats, curve choices, API shapes. Overrides `docs/` if conflict.
 
 Key points from sync doc:
 - **Android uses secp256r1** (NIST P-256), NOT X25519. AndroidKeyStore constraint.

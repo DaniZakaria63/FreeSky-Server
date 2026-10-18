@@ -57,8 +57,18 @@ fn noise_hkdf(ck: &[u8], input: &[u8], count: usize) -> Vec<Vec<u8>> {
     vec![out1, out2]
 }
 
+/// Whether verbose handshake diagnostics are enabled (`DEBUG=true` or `1`).
+///
+/// Key material (DH shared secret, HKDF outputs) must never be logged in
+/// production, so [`debug_noise_state`] only runs when this is true.
+fn debug_noise_enabled() -> bool {
+    matches!(std::env::var("DEBUG").as_deref(), Ok("true") | Ok("1"))
+}
+
 /// Debug: compute expected Noise NK responder state from msg1 bytes.
 /// Logs intermediate values to help diagnose handshake failures.
+///
+/// Only call when [`debug_noise_enabled`] is true — it logs key material.
 fn debug_noise_state(msg1: &[u8], sk_server: &SecretKey, prologue: &[u8]) {
     if msg1.len() < 65 {
         tracing::error!(
@@ -224,7 +234,9 @@ impl NoiseHandler {
                 Ok(_) => break,
                 Err(snow::Error::Input) if offset < 4096 => continue,
                 Err(e) => {
-                    debug_noise_state(&buf[..offset], &self.sk_server, prologue);
+                    if debug_noise_enabled() {
+                        debug_noise_state(&buf[..offset], &self.sk_server, prologue);
+                    }
                     anyhow::bail!("handshake msg1 error: {e}");
                 }
             }
@@ -407,7 +419,11 @@ async fn route_noise_request(
             // Validate APK signing key
             let apk_sha1 = req.apk_cert_sha1.trim().to_uppercase().replace(':', "");
             if apk_sha1 != state.trusted_app_key {
-                tracing::warn!("noise register rejected: untrusted APK signing key");
+                tracing::warn!(
+                    "noise register rejected: untrusted APK signing key (expected: {}, received: {})",
+                    &state.trusted_app_key,
+                    apk_sha1
+                );
                 return serde_json::json!({ "message": "untrusted APK signing key", "data": null });
             }
 

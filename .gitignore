@@ -2,6 +2,7 @@
 target/
 *.log
 community.db
+nohup.out
 .idea/
 .commandcode/
 .poolside/
