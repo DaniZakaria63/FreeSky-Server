@@ -123,9 +123,8 @@ pub enum AppError {
 // ─── Admin API ───
 //
 // Wire types for the admin API (server <-> admin TUI). The TUI runs on the
-// admin's machine and reaches these endpoints through the Cloudflare Tunnel;
-// every request carries `X-App-Key` plus (when Zero Trust Access is enabled)
-// `CF-Access-Client-Id` / `CF-Access-Client-Secret` service-token headers.
+// server itself and every request carries `X-App-Key`. The API is bound to
+// loopback and never published.
 
 /// Aggregate counters shown on the admin dashboard.
 #[derive(Debug, Clone, Serialize, Deserialize)]
