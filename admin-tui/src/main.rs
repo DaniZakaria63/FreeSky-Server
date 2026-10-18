@@ -8,7 +8,7 @@ use ratatui::backend::CrosstermBackend;
 use std::io;
 use std::time::Duration;
 
-use crate::api::{AdminApi, AdminConfig, CfAccessToken};
+use crate::api::{AdminApi, AdminConfig};
 use crate::app::App;
 
 /// Parse and validate the APK signing key SHA-1 from CLI arg or env var.
@@ -19,7 +19,7 @@ fn load_app_key() -> Result<String> {
         .or_else(|| std::env::var("APP_KEY").ok())
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "missing app key\n  usage: {} --app-key <SHA1> [--api-base <URL>]\n  env:   APP_KEY, ADMIN_API_BASE, CF_ACCESS_CLIENT_ID, CF_ACCESS_CLIENT_SECRET",
+                "missing app key\n  usage: {} --app-key <SHA1> [--api-base <URL>]\n  env:   APP_KEY, ADMIN_API_BASE",
                 std::env::args().next().as_deref().unwrap_or("admin-tui")
             )
         })?;
@@ -33,9 +33,8 @@ fn load_app_key() -> Result<String> {
 
 /// Resolve the admin API base URL from `--api-base` or `ADMIN_API_BASE`.
 ///
-/// Defaults to localhost (server and TUI on the same machine). For a remote
-/// server behind the Cloudflare Tunnel, set e.g.
-/// `ADMIN_API_BASE=https://admin.example.com`.
+/// Defaults to localhost, which is where the admin API lives: the TUI runs on
+/// the server itself and the API is never published anywhere.
 fn load_api_base() -> String {
     std::env::args()
         .position(|a| a == "--api-base")
@@ -47,36 +46,10 @@ fn load_api_base() -> String {
         .to_string()
 }
 
-/// Load the Cloudflare Access service token from the environment.
-///
-/// Both halves are required together; a lone half is almost certainly a
-/// misconfiguration and would surface later as an opaque 302 from Access.
-fn load_cf_access() -> Result<Option<CfAccessToken>> {
-    let client_id = std::env::var("CF_ACCESS_CLIENT_ID")
-        .ok()
-        .filter(|v| !v.trim().is_empty());
-    let client_secret = std::env::var("CF_ACCESS_CLIENT_SECRET")
-        .ok()
-        .filter(|v| !v.trim().is_empty());
-
-    match (client_id, client_secret) {
-        (Some(client_id), Some(client_secret)) => Ok(Some(CfAccessToken {
-            client_id,
-            client_secret,
-        })),
-        (None, None) => Ok(None),
-        _ => anyhow::bail!(
-            "CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET must be set together \
-             (create a service token in the Zero Trust dashboard)"
-        ),
-    }
-}
-
 fn main() -> Result<()> {
     let config = AdminConfig {
         base_url: load_api_base(),
         app_key: load_app_key()?,
-        cf_access: load_cf_access()?,
     };
     let api = AdminApi::new(config)?;
     let mut app = App::new(api);
