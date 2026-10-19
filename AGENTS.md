@@ -2,7 +2,7 @@
 
 ## Project
 
-Rust workspace: encrypted community app server. Server stores MLS-encrypted posts, cannot read content. Users authenticated via Noise NK handshake + secp256r1 device keys. Admin via ratatui TUI that runs on the admin's machine and reaches the admin API through a Cloudflare Tunnel (Zero Trust).
+Rust workspace: encrypted community app server. Server stores MLS-encrypted posts, cannot read content. Users authenticated via Noise NK handshake + secp256r1 device keys. Admin via a ratatui TUI that runs on the server itself and is reached over SSH — the admin API is never published.
 
 ## Priorities
 
@@ -20,9 +20,9 @@ freesky-server/
 │       ├── main.rs         # tokio main, dual listener (3000 HTTP, 9443 Noise)
 │       ├── noise.rs        # Noise NK handshake (snow crate)
 │       ├── routes.rs       # register, post, feed
-│       ├── admin.rs        # admin API (127.0.0.1:3001, via cloudflared)
+│       ├── admin.rs        # admin API (127.0.0.1:3001, SSH-only)
 │       └── db.rs           # libsql connection (local file or remote Turso)
-├── admin-tui/              # ratatui dashboard (runs on admin's machine)
+├── admin-tui/              # ratatui dashboard (runs on the server, over SSH)
 │   ├── Cargo.toml
 │   └── src/main.rs
 └── shared/                 # shared types, crypto helpers (optional)
@@ -38,7 +38,7 @@ cargo build -p freesky-server      # just server binary
 cargo build -p freesky-admin-tui   # just TUI binary (target/release/admin-tui)
 cargo test                         # all tests
 cargo test -p freesky-server       # server tests only
-cargo install --path admin-tui     # install admin-tui globally (admin's machine)
+cargo install --path admin-tui     # install the TUI locally (deploy ships it to the VPS)
 scp target/release/freesky-server <host>:/usr/local/bin/freesky-server
 ```
 
@@ -79,17 +79,24 @@ Schema created by `queries.rs::run_schema` (mirrors `docs/community-app-crypto-p
 
 ### Admin TUI (ratatui + reqwest)
 
-- Runs on the **admin's machine**, not the server; all data comes from the admin API
-- Reaches the API through the Cloudflare Tunnel (Zero Trust); requests carry
-  `X-App-Key` plus `CF-Access-Client-Id` / `CF-Access-Client-Secret` service-token headers
-- Admin API stays bound to `127.0.0.1:3001` on the server — only cloudflared reaches it
-- Config: `APP_KEY`, `ADMIN_API_BASE`, `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`
+- **Access is SSH only.** The TUI runs on the server and talks to
+  `127.0.0.1:3001`; `/usr/local/bin/freesky-admin` supplies `X-App-Key` from
+  `/etc/freesky.env` so the operator types no credentials.
+  Guide: `docs/admin-tui-ssh.md`
+- The admin API is deliberately **not** published through the Cloudflare Tunnel.
+  It was, with no Access application in front, which left it on the public
+  internet guarded only by `X-App-Key` — a value that ships inside the APK.
+  Do not re-publish it: beyond that header the origin has no way to tell who is
+  calling, so remote access means administration on the open internet
 - Install globally: `cargo install --path admin-tui` (binary: `admin-tui`)
+- Deploy: `.github/workflows/deploy.yml` ships `freesky-server` **and**
+  `admin-tui` + the wrapper scripts; `scripts/freesky-deploy.sh` is the root
+  helper that installs them on the VPS
 - Admin API endpoints: `/admin/health`, `/admin/stats`, `/admin/reports`,
   `/admin/reports/{id}/resolve`, `/admin/community`, `/admin/devices?q=`,
   `/admin/ban/{pk}`, `/admin/unban/{pk}`, `/admin/kick/{pk}`, `/admin/key-rotate`
 - API refuses to serve when `TRUSTED_APK_KEY` is unset (503) — no "auth disabled" mode
-- Setup guide: `docs/cloudflare-tunnel-admin.md`
+- Setup guide: `docs/admin-tui-ssh.md`
 
 ## Conventions
 
@@ -128,7 +135,7 @@ Schema created by `queries.rs::run_schema` (mirrors `docs/community-app-crypto-p
 cargo build --release --target x86_64-unknown-linux-gnu
 # binaries: target/release/freesky-server, target/release/admin-tui
 # server: systemd service (deploy.sh / GitHub Actions push to master)
-# admin-tui: installed on the admin's machine — cargo install --path admin-tui
+# admin-tui: shipped by the deploy workflow, runs on the server via `freesky-admin`
 ```
 
 Server data: single SQLite file (`community.db`, `TURSO_URL=file://...`) or remote Turso.

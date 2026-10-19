@@ -21,9 +21,11 @@ type AdminResult<T> = Result<Json<ApiResponse<T>>, AdminError>;
 
 /// Verify the `X-App-Key` header against the trusted app key.
 ///
-/// The admin API is reachable from the internet through the Cloudflare Tunnel
-/// (Zero Trust), so an unconfigured key disables the API entirely instead of
-/// silently skipping authentication.
+/// The admin API is bound to loopback and reached over SSH, so this header is
+/// the only credential the origin can check — and it is public, because it
+/// ships inside the APK. That is why the API is never published. An
+/// unconfigured key disables the API entirely instead of silently skipping
+/// authentication.
 fn verify_app_key(headers: &HeaderMap, expected: &str) -> Result<(), AdminError> {
     let provided = headers
         .get("x-app-key")
